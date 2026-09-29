@@ -1,0 +1,8 @@
+*.o
+*.d
+*.a
+/yeney-player
+/unit-test
+/test-player
+__pycache__/
+*.wav
