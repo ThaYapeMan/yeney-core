@@ -87,6 +87,22 @@ class ShmTests(unittest.TestCase):
             self.assertIn('ignoring output device hw:CARD=Dummy,DEV=0', log)
         self.assertTrue(path.exists(), 'producer must not unlink on exit')
 
+    def test_real_shm_underrun_rebuffers_once(self):
+        s, path, _ = self.session()
+        with s:
+            s.lms.rebuffer_delay = .7
+            body, _ = pcm(seconds=.35)
+            s.lms.strm('s', s.source(body, first=4410 * 4, delay=.5))
+            s.lms.wait('STMs')
+            s.lms.wait('STMo')
+            s.lms.wait('STMp')
+            self.assertEqual(snapshot(path)[1][2], 0)
+            s.lms.wait('STMr')
+            s.lms.wait('STMu')
+            s.stop()
+            self.assertEqual(sum(p.get('event') == 'STMo' for p in s.lms.packets), 1)
+            self.assertEqual(s.lms.rebuffer_commands, ['p', 'u'])
+
     def exercise_tracks(self, consumer=None):
         s, path, mac = self.session()
         with s:

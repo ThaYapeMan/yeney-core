@@ -251,12 +251,12 @@ player's codec precision without introducing host-specific code into core.
   No change to the byte capacities/fullness is needed.
 - The fake LMS optionally reacts to STMo with immediate `strm p` (zero), then
   `strm u` after a controlled refill interval. Deliberate starvation delivers
-  the remaining HTTP body during that interval. Both paced and buffered sinks
+  the remaining HTTP body during that interval. Both paced and buffered sinks, including the production SHM sink,
   must produce exactly one report and resume with sample-identical output.
   Normal starts and repeated manual `q, q, s` sequences must trigger neither
   STMo nor rebuffer transport. YeneY also checks the actual UPnP transport path
   for both engines with this reaction enabled.
 - No squeezelite source/pin, default player, deployment or LampaStream pin is
-  changed. Device-clock granularity can delay recognition of a genuine Sonos
-  underrun; conservative sink evidence avoids interrupting buffered playback.
+  changed. Device-clock granularity can delay or suppress recognition of a fractional-
+  second genuine Sonos underrun; conservative sink evidence avoids interrupting buffered playback.
   These are localhost regression tests, not a claim of a physical-device run.
