@@ -6,3 +6,7 @@
 /test-player
 __pycache__/
 *.wav
+
+/build/
+/decoder-test
+/demux-sanitized

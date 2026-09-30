@@ -257,7 +257,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(body[16] >> 6, 2)
         self.assertEqual(struct.unpack('!H', body[24:26])[0], 0x4000 if reconnect else 0)
         self.assertEqual(body[34:36], b'EN')
-        self.assertEqual(body[36:].decode().split(','), ['Model=yeney', 'ModelName=YeneY', 'AccuratePlayPoints=1', 'MaxSampleRate=48000', 'pcm'])
+        self.assertEqual(body[36:].decode().split(','), ['Model=yeney', 'ModelName=YeneY', 'AccuratePlayPoints=1', 'MaxSampleRate=48000', 'flc', 'alc', 'mp3', 'aif', 'pcm'])
 
     def test_01_helo_pcm_clock_pause_timer_gain_name(self):
         with Session() as s:
@@ -294,8 +294,8 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(order, sorted(order))
             done = next(p for p in lms.packets if p.get('event') == 'STMd')
             self.assertEqual(done['received'], len(body))
-            self.assertEqual(done['size'], 32768)
-            self.assertEqual(done['output_size'], 96000 * 8)
+            self.assertEqual(done['size'], 32768 + 65536)
+            self.assertEqual(done['output_size'], (96000 + 8192) * 8)
 
     def test_02_pcm_formats_bit_exact(self):
         for bits, channels, big in [(24, 2, False), (24, 1, True), (8, 1, False), (32, 2, True)]:
@@ -433,7 +433,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_09_unsupported_and_bad_pcm(self):
         with Session() as s:
-            s.lms.strm('s', fmt='f')
+            s.lms.strm('s', fmt='z')
             s.lms.wait('STMn')
             self.assertEqual([p.get('event', p['op']) for p in s.lms.packets], ['HELO', 'STMf', 'STMc', 'STMn'])
         with Session() as s:
@@ -553,7 +553,7 @@ class ProtocolTests(unittest.TestCase):
             comm = struct.pack('!HIH', 2, len(body) // 4, 16) + bytes.fromhex('400eac44000000000000')
             chunks = b'COMM' + struct.pack('!I', len(comm)) + comm + b'SSND' + struct.pack('!III', len(body) + 8, 0, 0) + body
             aiff = b'FORM' + struct.pack('!I', len(chunks) + 4) + b'AIFF' + chunks
-            s.lms.strm('s', s.source(aiff), unknown=True)
+            s.lms.strm('s', s.source(aiff))
             s.lms.wait('STMu')
             self.assertEqual(s.data(), expected)
         with Session() as s:

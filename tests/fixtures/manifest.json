@@ -1,0 +1,33 @@
+{
+  "SPDX-License-Identifier": "PolyForm-Noncommercial-1.0.0",
+  "signal": "tests/decoders_test.py signal_data, 44100 Hz",
+  "flac": [
+    {
+      "file": "flac-16-2.flac",
+      "seekOffset": 11649,
+      "seekFrames": 4096
+    },
+    {
+      "file": "flac-24-2.flac",
+      "seekOffset": 15693,
+      "seekFrames": 4096
+    },
+    {
+      "file": "flac-16-1.flac",
+      "seekOffset": 10266,
+      "seekFrames": 4096
+    }
+  ],
+  "mp3": [
+    {
+      "file": "gapless-0.mp3",
+      "frames": 7013,
+      "signalStart": 0
+    },
+    {
+      "file": "gapless-7013.mp3",
+      "frames": 8006,
+      "signalStart": 7013
+    }
+  ]
+}

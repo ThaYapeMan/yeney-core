@@ -1,5 +1,8 @@
 # Slimproto: PCM round 1
 
+Historical round 1 contract. Round 2 extends the codec list and adds decoder
+queue sizes to STAT; see [decoders.md](decoders.md) for the current decoder contract.
+
 ## Evidence and independence
 
 The implementation is original C++17: explicit byte serialization, one socket

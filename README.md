@@ -1,12 +1,16 @@
 # yeney-core
 
 An independently written C++17 LMS player core for YeneY and, later, LampaStream.
-Round 1 advertises **PCM only** and delivers signed 32-bit stereo frames to a
+Advertises **flc,alc,mp3,aif,pcm**, in that order, and delivers signed 32-bit stereo frames to a
 pluggable sink. No squeezelite implementation is included or linked.
 
-Build with a C++17 compiler, GNU Make and pthreads:
+Build with a C++17 compiler, GNU Make, pthreads and system libFLAC (`libflac-dev`).
+Initialize the pinned Apple ALAC submodule; minimp3 is already vendored.
+Tests also require clang-format; ffmpeg/flac generate reference fixtures when
+available, otherwise committed fixtures are used with an explicit SKIP reason:
 
 ```sh
+git submodule update --init --recursive
 make
 make test
 ./yeney-player -n YeneY -m 02:00:00:00:00:01 --sink null
@@ -20,7 +24,9 @@ then successive numbered segments. The null and WAV sinks run at real time.
 
 `libyeneycore.a` exposes `core/player.h` and `core/sink.h`. Set
 `Config::streamBytes` and `Config::outputFrames` to bound the two buffers;
-set `Config::discoveryAddress` for an isolated network. The sink's maximum
+set `Config::discoveryAddress` for an isolated network.
+`Config::earlyMediaBytes` caps MP4 media buffered before moov (default 256 MiB).
+Per-track workers add bounded 64 KiB input and 8192-frame output queues. The sink's maximum
 sample rate controls HELO. Source bit depth/channels are described at boundaries;
 frames passed to `write` are always 32-bit stereo. Sink callbacks must not block.
 
@@ -29,9 +35,17 @@ recording sink that partially accepts writes. Ports 3483 on loopback must be fre
 for discovery/server-switch tests. No frontend exists. See
 [the protocol contract and evidence](docs/slimproto.md).
 
-FLAC, MP3, DSP/fades, SHM, TLS and ICY metadata are outside this round. HTTP PCM
+ALAC uses our streaming MP4 demuxer; more than two channels is unsupported.
+DSP/fades, SHM, TLS and ICY metadata are outside this round. HTTP PCM
 responses must use Content-Length or connection-close framing, without transfer
 encoding. No changes to YeneY or LampaStream are required.
 
+See [decoder formats, gapless rules, limits and evidence](docs/decoders.md).
+`make format` formats our C++ files; third-party sources stay unchanged.
+
 Licensed under [PolyForm Noncommercial 1.0.0](LICENSE).
 Required Notice: Copyright (c) 2026 Jaap van Vliet.
+
+Third-party libraries retain their own licences; full texts and pins are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Include these notices when
+distributing binaries.

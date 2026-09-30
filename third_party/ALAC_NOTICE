@@ -1,0 +1,8 @@
+Apple Lossless Audio Codec (ALAC)
+Copyright (c) 2011 Apple Inc. All rights reserved.
+
+This distribution includes the unmodified mikebrady/alac codec source at
+5d8c5db0dfcadd5872f28e665cf4f4303447352a, under Apache License 2.0.
+Upstream LICENSE and per-file notices are retained in the pinned submodule.
+Upstream ships no NOTICE file. This distribution notice records its attribution;
+it does not claim to be an upstream NOTICE or change the upstream licence.

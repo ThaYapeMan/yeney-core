@@ -14,7 +14,9 @@ struct Format {
     unsigned bits = 16, channels = 2;
     bool bigEndian = false;
 };
-struct Frame { int32_t left, right; };
+struct Frame {
+    int32_t left, right;
+};
 // All calls occur on the player's event-loop thread. Positions are cumulative
 // stereo frames, including across format changes. stop/flush must not rewind them.
 // flush discards in-flight output; callbacks must return promptly. Format describes
@@ -23,8 +25,8 @@ class Sink {
 public:
     virtual ~Sink() = default;
     virtual uint32_t maxSampleRate() const { return 48000; }
-    virtual void trackBoundary(uint64_t frame, const Format&, bool gaplessCandidate) = 0;
-    virtual size_t write(const Frame*, size_t frames) = 0;
+    virtual void trackBoundary(uint64_t frame, const Format &, bool gaplessCandidate) = 0;
+    virtual size_t write(const Frame *, size_t frames) = 0;
     virtual void pause() = 0;
     virtual void resume() = 0;
     virtual void stop() = 0;
@@ -34,4 +36,4 @@ public:
     virtual void power(bool enabled) = 0;
     virtual bool paced() const = 0; // true: core supplies frames at real time
 };
-}
+} // namespace yeney
