@@ -192,7 +192,7 @@ class LMS:
 
 
 class Session:
-    def __init__(self, app=False, discover=False, sock=None, mode="normal", host="127.0.0.1", max_rate=None, sink="wav"):
+    def __init__(self, app=False, discover=False, sock=None, mode="normal", host="127.0.0.1", max_rate=None, sink="wav", app_args=(), mac="02:01:02:03:04:05"):
         self.temp = tempfile.TemporaryDirectory(prefix='yeney-test-')
         self.base = Path(self.temp.name) / 'record'
         self.lms = LMS(sock)
@@ -200,7 +200,8 @@ class Session:
         port = self.lms.listener.getsockname()[1]
         args = [str(ROOT / 'test-player'), 'discover' if discover else host, str(port), str(self.base), mode]
         if app:
-            args = [str(ROOT / 'yeney-player'), '-n', 'Fixture', '-m', '02:01:02:03:04:05', '-s', host + ':' + str(port), '--sink', 'wav:' + str(self.base) + '.wav' if sink == 'wav' else 'null']
+            args = [str(ROOT / 'yeney-player'), '-n', 'Fixture', '-m', mac, '-s', host + ':' + str(port), '--sink', 'wav:' + str(self.base) + '.wav' if sink == 'wav' else sink]
+            args += list(app_args)
             if max_rate is not None:
                 args += ['--max-rate', str(max_rate)]
         self.proc = subprocess.Popen(args, stdout=self.log, stderr=self.log)

@@ -10,3 +10,5 @@ __pycache__/
 /build/
 /decoder-test
 /demux-sanitized
+
+/shm-unit

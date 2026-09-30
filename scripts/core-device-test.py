@@ -26,10 +26,13 @@ formats. Run as root on the bridge host from the yeney-core checkout after
 
 Everything is written to /tmp/core-test-<timestamp>/ and packed into
 /tmp/core-test-<timestamp>.tar.gz: report.txt, player.log, lms-status.log,
-lms-events.log, slimproto.pcap, slimproto.txt (decoded capture), run-info.txt.
+lms-events.log, slimproto.pcap, slimproto.txt (decoded capture), run-info.txt,
+shm-extension.txt (11 extension hex dumps over 10 seconds). The final phase
+restarts with -v and checks the FLAC track's SHM ABI, generation, rate and pacing.
 Exit status 0 only if every check passes.
 """
 import argparse
+import mmap
 import os
 import re
 import shutil
@@ -166,13 +169,13 @@ def lms_host_from_config():
 class PlayerProcess:
     """Runs yeney-player and keeps its event lines with timestamps."""
 
-    def __init__(self, lms, logpath, max_rate=MAX_RATE, append=False):
+    def __init__(self, lms, logpath, max_rate=MAX_RATE, append=False, shm=False):
         self.lines = []
         self.lock = threading.Lock()
         self.log = open(logpath, "a" if append else "w")
         self.proc = subprocess.Popen(
             ["./yeney-player", "-n", PLAYER_NAME, "-m", PLAYER_MAC, "-s", lms,
-             "--sink", "null", "--max-rate", str(max_rate), "-d", "1"],
+             "--sink", "null", "--max-rate", str(max_rate), "-d", "1"] + (["-v"] if shm else []),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
@@ -357,6 +360,23 @@ def describe(message):
     return text
 
 
+def shm_snapshot(path):
+    """Copy metadata/extension only after equal even sequence reads."""
+    with open(path, "rb") as f:
+        if os.fstat(f.fileno()).st_size != 32888:
+            raise ValueError("SHM segment size is not 32888")
+        with mmap.mmap(f.fileno(), 32888, access=mmap.ACCESS_READ) as mm:
+            for _ in range(1000):
+                before = struct.unpack_from("<I", mm, 32856)[0]
+                if before & 1:
+                    continue
+                header, extension = mm[56:80], mm[32848:32888]
+                after = struct.unpack_from("<I", mm, 32856)[0]
+                if before == after:
+                    return struct.unpack("<IIB3xIq", header), struct.unpack("<IHHIQQQ4x", extension), extension
+    raise ValueError("SHM has no stable even snapshot")
+
+
 # ----------------------------------------------------------------- test --
 
 class Run:
@@ -458,6 +478,49 @@ class Run:
                    f"from {p1:.1f}s: {t0:.1f}s -> {t1:.1f}s (+{adv:.1f}s in {wall:.1f}s)")
         self.finish_phase(label, t_start, info, max_rate, native_192k)
 
+    def shm_phase(self):
+        label, track_id = "FLAC SHM", "44436"
+        self.say(f"=== {label} (id {track_id}); max_rate={MAX_RATE} Hz; sink=shm")
+        info = Cli.fields(self.cli.raw(f"songinfo 0 100 track_id:{track_id} tags:aloTd"))
+        start = time.time()
+        self.cli.player(f"playlistcontrol cmd:load track_id:{track_id}")
+        if not self.wait_playing():
+            self.check(label, "play", False, "LMS never reached play with advancing time")
+            return
+        samples = []
+        path = f"/dev/shm/squeezelite-{PLAYER_MAC}"
+        with open(os.path.join(self.outdir, "shm-extension.txt"), "w") as dump:
+            for index in range(11):  # baseline plus ten one-second intervals
+                if index:
+                    time.sleep(1)
+                try:
+                    header, ext, raw = shm_snapshot(path)
+                except (OSError, ValueError) as e:
+                    self.check(label, "snapshot", False, str(e))
+                    return
+                stamp = time.monotonic()
+                samples.append((stamp, header, ext))
+                dump.write(f"sample={index} monotonic={stamp:.6f} offset=32848\n{raw.hex(' ')}\n")
+                dump.flush()
+        self.check(label, "abi", all(e[0] == 0x48555345 and e[1] == 1 and e[2] == 0
+                   and e[3] % 2 == 0 for _, _, e in samples),
+                   "magic/version/flags and stable even sequence checked on 11 samples")
+        self.check(label, "generation", len({e[4] for _, _, e in samples}) == 1,
+                   f"generation={samples[0][2][4]:016x}; constant across 10 seconds")
+        lines = self.player.since(start)
+        rates = [int(m.group(1)) for line in lines for m in [re.search(r"rate=(\d+)", line)] if m]
+        rate = rates[-1] if rates else 0
+        self.check(label, "rate", rate > 0 and rate <= MAX_RATE
+                   and all(h[3] == rate for _, h, _ in samples),
+                   f"stream rate={rate} Hz; SHM rates={sorted({h[3] for _, h, _ in samples})}")
+        elapsed = samples[-1][0] - samples[0][0]
+        advanced = samples[-1][2][5] - samples[0][2][5]
+        ratio = advanced / (rate * elapsed) if rate and elapsed else 0
+        self.check(label, "pace", 0.95 <= ratio <= 1.05
+                   and all(e[5] > samples[i - 1][2][5] for i, (_, _, e) in enumerate(samples) if i),
+                   f"+{advanced} frames in {elapsed:.3f}s at {rate} Hz; ratio={ratio:.4f}")
+        self.finish_phase(label, start, info)
+
     def finish_phase(self, label, t_start, info, max_rate=MAX_RATE, native_192k=False):
         t_end = time.time()
         self.phases.append((label, t_start, t_end, info, max_rate, native_192k))
@@ -551,7 +614,7 @@ def main():
     with open(os.path.join(outdir, "run-info.txt"), "w") as f:
         f.write(f"yeney-core={build or '?'}\nlms={lms}\nplayer={PLAYER_NAME} {PLAYER_MAC}\n"
                 f"tracks={' '.join(t[1] for t in TRACKS + [NATIVE_TRACK])}\n"
-                f"initial_max_rate={MAX_RATE}\nnative_max_rate={NATIVE_MAX_RATE}\nstarted={time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f"initial_max_rate={MAX_RATE}\nnative_max_rate={NATIVE_MAX_RATE}\nshm_max_rate={MAX_RATE}\nshm_track=44436\nstarted={time.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     pcap = os.path.join(outdir, "slimproto.pcap")
     capture = None if args.no_capture else Capture(lms, pcap)
@@ -588,6 +651,19 @@ def main():
             raise KeyboardInterrupt
         run.check("native setup", "connect", True, "restarted player sent HELO")
         run.track(*NATIVE_TRACK, max_rate=NATIVE_MAX_RATE, native_192k=True)
+        cli.player("stop")
+        player.stop()
+        player = PlayerProcess(lms, os.path.join(outdir, "player.log"), MAX_RATE, append=True, shm=True)
+        run.player = player
+        for _ in range(20):
+            if any("HELO" in line for line in player.since(0)):
+                break
+            time.sleep(0.5)
+        else:
+            run.check("SHM setup", "connect", False, "SHM player sent no HELO within 10 s")
+            raise KeyboardInterrupt
+        run.check("SHM setup", "connect", True, "SHM player sent HELO")
+        run.shm_phase()
     except KeyboardInterrupt:
         run.say("stopped early")
     finally:

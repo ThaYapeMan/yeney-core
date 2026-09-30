@@ -11,8 +11,8 @@ LDLIBS += -pthread -lFLAC
 ALAC_C = EndianPortable ALACBitUtilities ag_dec dp_dec matrix_dec
 ALAC_OBJS = $(addprefix build/alac/,$(addsuffix .o,$(ALAC_C))) build/alac/ALACDecoder.o
 CORE_OBJS = core/protocol.o core/player.o core/decoder.o core/mp4.o $(ALAC_OBJS)
-APP_OBJS = apps/yeney-player/main.o apps/yeney-player/sinks.o
-TEST_OBJS = tests/unit.o tests/fixture.o tests/decoder_fixture.o
+APP_OBJS = apps/yeney-player/main.o apps/yeney-player/sinks.o sinks/shm_v1/sink.o
+TEST_OBJS = tests/shm_unit.o tests/unit.o tests/fixture.o tests/decoder_fixture.o
 
 all: libyeneycore.a yeney-player
 
@@ -49,19 +49,24 @@ decoder-test: tests/decoder_fixture.o libyeneycore.a
 demux-sanitized: tests/demux_fixture.cpp core/mp4.cpp core/protocol.cpp core/mp4.h
 	$(CXX) $(CPPFLAGS) -std=c++17 -g -O1 -fno-omit-frame-pointer -fno-pie -no-pie -fsanitize=address,undefined -o $@ tests/demux_fixture.cpp core/mp4.cpp core/protocol.cpp
 
-test: format-check all unit-test test-player decoder-test demux-sanitized
+shm-unit: tests/shm_unit.o sinks/shm_v1/sink.o
+	$(CXX) $(CXXFLAGS) -o $@ $^ -pthread -Wl,--wrap=getrandom -Wl,--wrap=open
+
+test: format-check shm-unit all unit-test test-player decoder-test demux-sanitized
 	./unit-test
+	./shm-unit
 	python3 tests/fake_lms.py
 	python3 tests/decoders_test.py
 	python3 tests/device_script_test.py
+	python3 tests/shm_test.py
 
 clean:
-	rm -f $(CORE_OBJS) $(APP_OBJS) $(TEST_OBJS) $(CORE_OBJS:.o=.d) $(APP_OBJS:.o=.d) $(TEST_OBJS:.o=.d) libyeneycore.a yeney-player unit-test test-player decoder-test demux-sanitized
+	rm -f $(CORE_OBJS) $(APP_OBJS) $(TEST_OBJS) $(CORE_OBJS:.o=.d) $(APP_OBJS:.o=.d) $(TEST_OBJS:.o=.d) libyeneycore.a yeney-player unit-test test-player decoder-test demux-sanitized shm-unit
 
 -include $(CORE_OBJS:.o=.d) $(APP_OBJS:.o=.d) $(TEST_OBJS:.o=.d)
 .PHONY: all clean test format format-check
 
-OWN_SOURCES = $(shell find core apps tests -type f \( -name "*.cpp" -o -name "*.h" \))
+OWN_SOURCES = $(shell find core apps sinks tests -type f \( -name "*.cpp" -o -name "*.h" \))
 CLANG_FORMAT ?= clang-format
 format:
 	$(CLANG_FORMAT) -i $(OWN_SOURCES)

@@ -318,7 +318,7 @@ struct Player::Impl {
                 controlConnecting = true;
                 connectDeadline = now + 3000;
             } catch (const std::exception &e) {
-                log(e.what());
+                log("error: " + std::string(e.what()));
                 disconnect();
             }
             return;
@@ -361,7 +361,7 @@ struct Player::Impl {
                         break;
                 }
             } catch (const std::exception &e) {
-                log(e.what());
+                log("error: " + std::string(e.what()));
                 disconnect();
             }
         }
@@ -737,13 +737,16 @@ struct Player::Impl {
         audibleEvents();
         if (queued == 0 && fetching && fetching->decoded && output.empty() &&
             sink.audibleFrames() >= submitted && !ended) {
+            sink.idle();
             stat("STMu");
             ended = true;
             playing = false;
             credit = 0;
         } else if (queued == 0 && fetching && !fetching->decoded && fetching->ready) {
-            if (!underrun)
+            if (!underrun) {
+                sink.idle();
                 stat("STMo");
+            }
             underrun = true;
             credit = 0;
         }

@@ -17,6 +17,20 @@ make test
 ./yeney-player -n YeneY -m 02:00:00:00:00:01 -s localhost:3483 --sink wav:listen.wav
 ```
 
+For LampaStream, use the same player arguments with our paced SHM output:
+
+```sh
+./yeney-player -n "Core player" -m 02:00:00:00:00:01 -o hw:CARD=Dummy,DEV=0 -v -s localhost
+# --sink shm is equivalent to -v; no ALSA device is opened.
+```
+
+The SHM v1 segment is `/dev/shm/squeezelite-<lowercase-mac>` and is left in place
+on exit for LampaStream's lifecycle/orphan cleanup. Install/select yeney-player
+as the executable in place of squeezelite externally; this repo does not alter
+LampaStream. See [SHM v1 layout, lifecycle and compatibility](docs/shm-v1.md).
+`-o` is accepted and ignored with one stderr info line. Output is quiet by default;
+errors still go to stderr, and `-d 1` enables event lines.
+
 Without `-s`, UDP discovery uses port 3483. `-d 0` silences event logging;
 levels 1–5 print event lines. `--max-rate <Hz>` sets the null/WAV sink maximum
 (default 48000; accepted range 44100..384000) and the HELO MaxSampleRate.
@@ -38,7 +52,7 @@ for discovery/server-switch tests. No frontend exists. See
 [the protocol contract and evidence](docs/slimproto.md).
 
 ALAC uses our streaming MP4 demuxer; more than two channels is unsupported.
-DSP/fades, SHM, TLS and ICY metadata are outside this round. HTTP PCM
+DSP/fades, TLS and ICY metadata are outside this round. HTTP PCM
 responses must use Content-Length or connection-close framing, without transfer
 encoding. No changes to YeneY or LampaStream are required.
 

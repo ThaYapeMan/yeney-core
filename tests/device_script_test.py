@@ -5,6 +5,7 @@
 import importlib.util
 from pathlib import Path
 import tempfile
+import struct
 import unittest
 from unittest.mock import Mock, patch
 
@@ -61,6 +62,33 @@ class DeviceScriptTests(unittest.TestCase):
             self.assertTrue(self.result('default', 'format'))
             self.assertEqual(self.result('native setup', 'caps'), caps_ok)
             self.assertEqual(self.result('native', 'format'), format_ok)
+
+    def test_shm_phase_reports_abi_rate_generation_and_pace(self):
+        self.run.wait_playing = Mock(return_value=True)
+        self.run.cli.raw.return_value = 'songinfo title:fixture samplerate:44100 type:flc'
+        self.player.since.return_value = ['boundary rate=44100']
+        for field, bad in [(None, None), ('generation', 99), ('rate', 48000), ('sequence', 3), ('pace', 40000)]:
+            self.run.results.clear()
+            samples = []
+            for i in range(11):
+                rate = bad if field == 'rate' else 44100
+                generation = bad if field == 'generation' and i == 5 else 7
+                sequence = bad if field == 'sequence' else i * 2
+                position = i * (bad if field == 'pace' else 44100)
+                extension = (0x48555345, 1, 0, sequence, generation, position, 0)
+                raw = struct.pack('<IHHIQQQ4x', *extension)
+                samples.append(((16384, position * 2 % 16384, 1, rate, 0), extension, raw))
+            with patch.object(device, 'shm_snapshot', side_effect=samples), \
+                    patch.object(device.time, 'sleep'), \
+                    patch.object(device.time, 'monotonic', side_effect=range(11)):
+                self.run.shm_phase()
+            self.assertEqual(self.result('FLAC SHM', 'generation'), field != 'generation')
+            self.assertEqual(self.result('FLAC SHM', 'rate'), field != 'rate')
+            self.assertEqual(self.result('FLAC SHM', 'abi'), field != 'sequence')
+            self.assertEqual(self.result('FLAC SHM', 'pace'), field != 'pace')
+            dump = (Path(self.temp.name) / 'shm-extension.txt').read_text()
+            self.assertEqual(dump.count('offset=32848'), 11)
+            self.assertIn('45 53 55 48 01 00', dump)
 
     def test_restart_preserves_identity_and_appends_log(self):
         path = Path(self.temp.name) / 'player.log'

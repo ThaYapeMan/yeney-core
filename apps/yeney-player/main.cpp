@@ -6,6 +6,7 @@
 
 #include "core/player.h"
 #include "sinks.h"
+#include "sinks/shm_v1/sink.h"
 #include <atomic>
 #include <csignal>
 #include <cstdio>
@@ -19,15 +20,21 @@ int main(int argc, char **argv) {
     try {
         yeney::Config cfg;
         std::string sinkName = "null";
-        int level = 1;
+        int level = 0;
+        std::string ignoredDevice;
         uint32_t maxRate = 48000;
         bool haveName = false, haveMac = false;
         for (int i = 1; i < argc; ++i) {
             std::string arg = argv[i];
             if (arg == "--help") {
-                std::cout << "yeney-player -n <name> -m <mac> [-s <host>[:port]] [--sink null|wav:<path>] "
-                             "[--max-rate <Hz>] [-d <level>]\n";
+                std::cout
+                    << "yeney-player -n <name> -m <mac> [-s <host>[:port]] [--sink null|wav:<path>|shm] "
+                       "[-v] [-o <device>] [--max-rate <Hz>] [-d <level>]\n";
                 return 0;
+            }
+            if (arg == "-v") {
+                sinkName = "shm";
+                continue;
             }
             if (i + 1 == argc)
                 throw std::invalid_argument("missing value for " + arg);
@@ -58,7 +65,9 @@ int main(int argc, char **argv) {
                         throw std::invalid_argument("invalid port");
                     cfg.port = port;
                 }
-            } else if (arg == "--sink")
+            } else if (arg == "-o")
+                ignoredDevice = v;
+            else if (arg == "--sink")
                 sinkName = v;
             else if (arg == "--max-rate") {
                 const char *message = "--max-rate must be an integer in 44100..384000 Hz";
@@ -85,12 +94,20 @@ int main(int argc, char **argv) {
         std::unique_ptr<yeney::Sink> sink;
         if (sinkName == "null")
             sink = std::make_unique<yeney::NullSink>(maxRate);
+        else if (sinkName == "shm")
+            sink = std::make_unique<yeney::ShmV1Sink>(cfg.mac, maxRate);
         else if (sinkName.rfind("wav:", 0) == 0 && !sinkName.substr(4).empty())
             sink = std::make_unique<yeney::WavSink>(sinkName.substr(4), maxRate);
         else
             throw std::invalid_argument("unknown sink");
+        if (!ignoredDevice.empty())
+            std::cerr << "yeney-player: ignoring output device " << ignoredDevice
+                      << "; core pacer supplies timing\n";
         cfg.log = [level](const std::string &s) {
-            if (level)
+            if (s.find("error") != std::string::npos || s.find("unsupported") != std::string::npos ||
+                s.rfind("STMn", 0) == 0)
+                std::cerr << "yeney-player: " << s << std::endl;
+            else if (level)
                 std::cout << s << std::endl;
         };
         std::signal(SIGINT, stopPlayer);

@@ -34,6 +34,7 @@ public:
     virtual uint64_t audibleFrames() const = 0;
     virtual void volume(uint32_t left, uint32_t right) = 0; // 16.16 gain, no PCM scaling
     virtual void power(bool enabled) = 0;
+    virtual void idle() {}          // No PCM available; optional analysis silence notification.
     virtual bool paced() const = 0; // true: core supplies frames at real time
 };
 } // namespace yeney
