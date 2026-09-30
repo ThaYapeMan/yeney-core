@@ -102,7 +102,11 @@ For each accepted start, ordering is:
    complete PCM frames into the output queue; a partial final frame emits STMn.
 9. STMu is emitted once after all queued and sink-buffered output has drained,
    provided no next stream remains. STMo instead reports starvation while the
-   current stream is incomplete, once per starvation episode.
+   current stream is incomplete, once per starvation episode. It requires a
+   started track (STMs already emitted and frames submitted), running playback
+   outside a pause or timed start, an empty core queue, and
+   `sink.outputEmpty(submitted)`. Accepting PCM into a buffered sink alone is
+   not starvation. Successful output acceptance clears the episode latch.
 
 STMs and STMd have no unconditional ordering relative to one another: a short
 or unpaced track can finish decoding before its first frame becomes audible.
@@ -212,3 +216,47 @@ nonblocking Decoder interface. It receives DecoderConfig and must return a
 decoder; a null result is an explicit stream error. The default remains
 `makeDecoder`, including minimp3. This permits a host to match an existing
 player's codec precision without introducing host-specific code into core.
+
+## Decisions: output starvation with buffered sinks
+
+- Behavioural evidence: ThaYapeMan/squeezelite at
+  `0e1667ead996834e355fc51f6a8eb2ea7e55f44b`, `slimproto.c:725–728`, sends
+  STMo exactly when `output.state == OUTPUT_RUNNING && !sentSTMo &&
+  status.output_full == 0 && status.stream_state == STREAMING_HTTP`.
+  `slimproto.c:695–700` obtains fullness from the output ring; `output.c`
+  advances that ring through the output callback. Its latch is reset on a new
+  stream (`slimproto.c:381`). It does not explicitly test STMs or device frames.
+  Core preserves the running/incomplete/empty-output meaning, with an explicit
+  started-track gate and sink emptiness because an unpaced sink can accept
+  seconds of PCM immediately. Core deliberately resets its latch on resumed
+  output, allowing one report for each distinct starvation episode.
+- New condition: running, powered, unpaused playback; no timed-start deadline;
+  STMs emitted and submitted frames beyond the announced boundary; empty core
+  queue; ready but incomplete stream; and sink-reported output emptiness.
+  `Sink::outputEmpty` defaults to `drained`, retaining paced SHM behaviour.
+  A remote sink may distinguish feeder completion from downstream starvation;
+  Sonos must include encoded/HTTP/device audio through its audible position.
+- STMd remains decoder completion, allowing LMS to fetch a successor while
+  buffered audio plays. Waiting for sink drain would break that contract.
+- STMu already requires decoder completion, no remaining output tracks, and
+  `sink.drained(submitted)`. No core change is needed. A remote sink may use
+  feeder completion for final drain when its device clock has coarse resolution;
+  this is distinct from the stricter starvation test.
+- STMl remains pre-start decoder/output readiness for synchronisation. Output
+  cannot yet have been handed to an unpaced sink, so no drain gate is needed.
+- STAT input/output fullness describes core-owned input, decoder and PCM queues,
+  not device or network buffers. This matches squeezelite's ring fullness,
+  which excludes its separate device-frame count. Zero fullness is legal while
+  a buffered sink plays; it must not be used alone to infer output starvation.
+  No change to the byte capacities/fullness is needed.
+- The fake LMS optionally reacts to STMo with immediate `strm p` (zero), then
+  `strm u` after a controlled refill interval. Deliberate starvation delivers
+  the remaining HTTP body during that interval. Both paced and buffered sinks
+  must produce exactly one report and resume with sample-identical output.
+  Normal starts and repeated manual `q, q, s` sequences must trigger neither
+  STMo nor rebuffer transport. YeneY also checks the actual UPnP transport path
+  for both engines with this reaction enabled.
+- No squeezelite source/pin, default player, deployment or LampaStream pin is
+  changed. Device-clock granularity can delay recognition of a genuine Sonos
+  underrun; conservative sink evidence avoids interrupting buffered playback.
+  These are localhost regression tests, not a claim of a physical-device run.

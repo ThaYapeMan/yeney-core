@@ -874,7 +874,8 @@ struct Player::Impl {
             ended = true;
             playing = false;
             credit = 0;
-        } else if (queued == 0 && fetching && !fetching->decoded && fetching->ready) {
+        } else if (queued == 0 && fetching && !fetching->decoded && fetching->ready && audible &&
+                   submitted > audible->first && !wake && sink.outputEmpty(submitted)) {
             if (!underrun) {
                 sink.idle();
                 stat("STMo");

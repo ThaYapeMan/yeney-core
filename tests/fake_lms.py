@@ -103,6 +103,9 @@ class LMS:
         self.listener = sock or listener()
         self.connection = None
         self.packets = []
+        self.rebuffer_delay = None
+        self.rebuffer_commands = []
+        self.rebuffer_timers = []
 
     def accept(self):
         if self.connection:
@@ -151,7 +154,21 @@ class LMS:
         else:
             raise AssertionError('unexpected opcode ' + opcode)
         self.packets.append(p)
+        self.react(p)
         return p
+
+    def react(self, packet):
+        # Opt-in LMS output-underrun reaction: pause immediately, then unpause
+        # after the fixture's deliberately controlled refill interval.
+        if packet.get('event') == 'STMo' and self.rebuffer_delay is not None:
+            self.rebuffer_commands.append('p')
+            self.strm('p')
+            def resume():
+                self.rebuffer_commands.append('u')
+                self.strm('u')
+            timer = threading.Timer(self.rebuffer_delay, resume)
+            self.rebuffer_timers.append(timer)
+            timer.start()
 
     def wait(self, event, timeout=5):
         deadline = time.monotonic() + timeout
@@ -186,6 +203,9 @@ class LMS:
                 return p
 
     def close(self):
+        for timer in self.rebuffer_timers:
+            timer.cancel()
+            timer.join()
         if self.connection:
             self.connection.close()
         self.listener.close()
@@ -487,13 +507,39 @@ class ProtocolTests(unittest.TestCase):
             s.lms.wait('STMn')
 
     def test_10_underrun_recovers(self):
-        with Session() as s:
-            body, expected = pcm(seconds=.35)
-            s.lms.strm('s', s.source(body, first=4410 * 4, delay=.3))
-            s.lms.wait('STMo')
-            self.assertFalse(any(p.get('event') == 'STMu' for p in s.lms.packets))
-            s.lms.wait('STMu')
-            self.assertEqual(s.data(), expected)
+        for mode in ('normal', 'staged'):
+            with self.subTest(mode=mode), Session(mode=mode) as s:
+                s.lms.rebuffer_delay = .7
+                body, expected = pcm(seconds=.35)
+                s.lms.strm('s', s.source(body, first=4410 * 4, delay=.5))
+                s.lms.wait('STMs')
+                s.lms.wait('STMo')
+                s.lms.wait('STMp')
+                self.assertFalse(any(p.get('event') == 'STMu' for p in s.lms.packets))
+                s.lms.wait('STMr')
+                s.lms.wait('STMu')
+                self.assertEqual(s.data(), expected)
+                self.assertEqual(sum(p.get('event') == 'STMo' for p in s.lms.packets), 1)
+                self.assertEqual(s.lms.rebuffer_commands, ['p', 'u'])
+
+    def test_buffered_starts_and_manual_changes_do_not_rebuffer(self):
+        for mode in ('normal', 'staged'):
+            with self.subTest(mode=mode), Session(mode=mode) as s:
+                s.lms.rebuffer_delay = .1
+                body, _ = pcm(seconds=2)
+                for track in range(4):
+                    if track:
+                        for _ in range(2):
+                            s.lms.strm('q')
+                            s.lms.wait('STMf')
+                    # A live stream pauses delivery while buffered audio plays.
+                    s.lms.strm('s', s.source(body, first=44100 * 4, delay=.25))
+                    s.lms.wait('STMs')
+                    time.sleep(.4)
+                    s.lms.timer()
+                s.stop()
+                self.assertFalse(any(p.get('event') == 'STMo' for p in s.lms.packets))
+                self.assertEqual(s.lms.rebuffer_commands, [])
 
     def test_11_reconnect_backoff(self):
         with Session() as s:

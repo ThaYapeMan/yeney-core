@@ -36,6 +36,9 @@ public:
     virtual uint64_t startedFrames() const { return audibleFrames(); }
     // Output completion is distinct from its audible clock for remote sinks.
     virtual bool drained(uint64_t submitted) const { return audibleFrames() >= submitted; }
+    // Starvation must include downstream output, even when drained() reports
+    // feeder completion for a remote device with a coarse audible clock.
+    virtual bool outputEmpty(uint64_t submitted) const { return drained(submitted); }
     virtual void volume(uint32_t left, uint32_t right) = 0; // 16.16 gain, no PCM scaling
     virtual void power(bool enabled) = 0;
     virtual void idle() {}          // No PCM available; optional analysis silence notification.
