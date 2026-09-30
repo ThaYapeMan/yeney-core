@@ -49,7 +49,7 @@ public:
                 for (unsigned j = 0; j < 4; ++j)
                     pcm_.put(v >> (j * 8));
         frames_ += n;
-        if (mode_ == "delayed") {
+        if (mode_ == "delayed" || mode_ == "staged") {
             if (delivery_.empty())
                 lastDelivery_ = std::max(lastDelivery_, Clock::now() + std::chrono::milliseconds(60));
             lastDelivery_ +=
@@ -82,7 +82,7 @@ public:
         events_ << "flush" << std::endl;
     }
     uint64_t audibleFrames() const override {
-        if (mode_ != "delayed")
+        if (mode_ != "delayed" && mode_ != "staged")
             return audible_ = frames_;
         auto now = paused_ ? pausedAt_ : Clock::now();
         while (!delivery_.empty() && delivery_.front().at <= now) {
@@ -93,7 +93,8 @@ public:
     }
     void volume(uint32_t l, uint32_t r) override { events_ << "volume " << l << ' ' << r << std::endl; }
     void power(bool on) override { events_ << "power " << on << std::endl; }
-    bool paced() const override { return mode_ != "delayed"; }
+    uint64_t startedFrames() const override { return frames_; }
+    bool paced() const override { return mode_ != "delayed" && mode_ != "staged"; }
 };
 int main(int argc, char **argv) {
     if (argc != 4 && argc != 5)
@@ -117,6 +118,7 @@ int main(int argc, char **argv) {
                 std::cout << "factory " << c.codec << std::endl;
                 return yeney::makeDecoder(c);
             };
+        cfg.startOnSubmit = argc == 5 && std::string(argv[4]) == "staged";
         RecordingSink sink(argv[3], argc == 5 ? argv[4] : "normal");
         std::signal(SIGINT, signalStop);
         std::signal(SIGTERM, signalStop);

@@ -199,8 +199,9 @@ last full stop or streaming flush. This is the state before the command. The
 observer must return promptly and must not re-enter Player. With no observer,
 command processing is unchanged.
 
-`Config::startOnSubmit` optionally announces STMs at submission rather than
-at audibility. It defaults to false; elapsed always uses `audibleFrames()`.
+`Config::startOnSubmit` optionally announces STMs at the sink's `startedFrames()` point rather than
+at audibility. A staged sink reports when its feeder begins that batch, so
+queued future tracks cannot announce themselves before their output starts. It defaults to false; elapsed always uses `audibleFrames()`.
 `Sink::drained(submitted)` defaults to `audibleFrames() >= submitted`. A remote
 output can instead report completion of its output queue without manufacturing
 audible frames, for devices whose positions have only whole-second resolution.

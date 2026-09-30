@@ -709,7 +709,7 @@ struct Player::Impl {
         }
     }
     void audibleEvents() {
-        uint64_t position = cfg.startOnSubmit ? submitted : sink.audibleFrames();
+        uint64_t position = cfg.startOnSubmit ? sink.startedFrames() : sink.audibleFrames();
         while (!boundaries.empty() && position > boundaries.front()->first) {
             audible = boundaries.front();
             boundaries.pop_front();

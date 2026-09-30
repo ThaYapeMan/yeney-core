@@ -262,6 +262,16 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(body[34:36], b'EN')
         self.assertEqual(body[36:].decode().split(','), ['Model=yeney', 'ModelName=YeneY', 'AccuratePlayPoints=1', 'MaxSampleRate=48000', 'alc', 'flc', 'mp3', 'aif', 'pcm'])
 
+    def test_staged_start_clock(self):
+        with Session(mode='staged') as s:
+            body, expected = pcm(seconds=.2)
+            s.lms.strm('s', s.source(body))
+            start = s.lms.wait('STMs')
+            self.assertEqual(start['elapsed'], 0)
+            end = s.lms.wait('STMu')
+            self.assertGreater(end['time'] - start['time'], .15)
+            self.assertEqual(s.data(), expected)
+
     def test_command_observer(self):
         from unittest.mock import patch
         with patch.dict(os.environ, {'YENEY_TEST_OBSERVER': '1'}), Session() as s:

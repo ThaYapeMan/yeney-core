@@ -32,6 +32,8 @@ public:
     virtual void stop() = 0;
     virtual void flush() = 0;
     virtual uint64_t audibleFrames() const = 0;
+    // Frames which have reached the output device/feeder start point.
+    virtual uint64_t startedFrames() const { return audibleFrames(); }
     // Output completion is distinct from its audible clock for remote sinks.
     virtual bool drained(uint64_t submitted) const { return audibleFrames() >= submitted; }
     virtual void volume(uint32_t left, uint32_t right) = 0; // 16.16 gain, no PCM scaling
