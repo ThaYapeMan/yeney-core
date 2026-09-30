@@ -5,6 +5,7 @@
 // THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
 
 #pragma once
+#include "decoder.h"
 #include "protocol.h"
 #include <atomic>
 #include <functional>
@@ -30,6 +31,8 @@ struct Config {
     // Network outputs can announce boundaries on submission while keeping
     // elapsed tied exclusively to the sink's audible coordinate.
     bool startOnSubmit = false;
+    // Optional host codec selection; defaults to makeDecoder.
+    std::function<std::unique_ptr<Decoder>(const DecoderConfig &)> decoderFactory;
 };
 class Player {
     struct Impl;

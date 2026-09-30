@@ -112,6 +112,11 @@ int main(int argc, char **argv) {
             cfg.observeCommand = [](const yeney::Command &c) {
                 std::cout << "observe " << c.letter << ' ' << c.value << ' ' << c.playing << std::endl;
             };
+        if (std::getenv("YENEY_TEST_OBSERVER"))
+            cfg.decoderFactory = [](const yeney::DecoderConfig &c) {
+                std::cout << "factory " << c.codec << std::endl;
+                return yeney::makeDecoder(c);
+            };
         RecordingSink sink(argv[3], argc == 5 ? argv[4] : "normal");
         std::signal(SIGINT, signalStop);
         std::signal(SIGTERM, signalStop);

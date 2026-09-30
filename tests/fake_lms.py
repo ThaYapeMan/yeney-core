@@ -285,6 +285,7 @@ class ProtocolTests(unittest.TestCase):
                 pass
             s.stop()
             lines = s.base.with_suffix('.log').read_text().splitlines()
+            self.assertIn('factory p', lines)
             observed = [line for line in lines if line.startswith('observe ')]
             self.assertEqual(observed, ['observe s 65536 0', 'observe p 0 1',
                 'observe u 0 0', 'observe a 17 1', 'observe t 4275878552 1',

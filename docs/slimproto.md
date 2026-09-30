@@ -205,3 +205,9 @@ at audibility. It defaults to false; elapsed always uses `audibleFrames()`.
 output can instead report completion of its output queue without manufacturing
 audible frames, for devices whose positions have only whole-second resolution.
 These hooks have no device-specific logic; existing sinks retain their behaviour.
+
+Hosts may set `Config::decoderFactory` to select another implementation of the
+nonblocking Decoder interface. It receives DecoderConfig and must return a
+decoder; a null result is an explicit stream error. The default remains
+`makeDecoder`, including minimp3. This permits a host to match an existing
+player's codec precision without introducing host-specific code into core.

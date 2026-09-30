@@ -403,7 +403,9 @@ struct Player::Impl {
         c.endian = p[4];
         c.maxRate = sink.maxSampleRate();
         c.earlyMediaCap = cfg.earlyMediaBytes;
-        t.decoder = makeDecoder(c);
+        t.decoder = cfg.decoderFactory ? cfg.decoderFactory(c) : makeDecoder(c);
+        if (!t.decoder)
+            throw std::runtime_error("decoder factory returned no decoder");
     }
     void command(const Bytes &b) {
         const std::string op(b.begin(), b.begin() + 4);
