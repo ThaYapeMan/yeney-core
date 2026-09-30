@@ -6,6 +6,7 @@
 
 #include "core/protocol.h"
 #include "core/ring.h"
+#include "core/sample_conversion.h"
 #include "core/transitions.h"
 #include <cassert>
 #include <cstring>
@@ -14,6 +15,25 @@
 #include <random>
 using namespace yeney;
 int main() {
+    using detail::floatToFrame;
+    assert(floatToFrame(0.0f) == 0 && floatToFrame(-0.0f) == 0);
+    assert(floatToFrame(0.5f) == 1073741824 && floatToFrame(-0.5f) == -1073741824);
+    const float half = std::ldexp(1.0f, -32);
+    assert(floatToFrame(half) == 1 && floatToFrame(-half) == -1);
+    assert(floatToFrame(3 * half) == 2 && floatToFrame(-3 * half) == -2);
+    assert(floatToFrame(std::nextafter(half, 0.0f)) == 0);
+    assert(floatToFrame(std::nextafter(-half, 0.0f)) == 0);
+    assert(floatToFrame(std::nextafter(1.0f, 0.0f)) == 2147483520);
+    assert(floatToFrame(std::nextafter(-1.0f, 0.0f)) == -2147483520);
+    for (float x : {1.0f, std::nextafter(1.0f, 2.0f), 1.5f, std::numeric_limits<float>::max(),
+                    std::numeric_limits<float>::infinity()}) {
+        assert(floatToFrame(x) == INT32_MAX);
+        assert(floatToFrame(-x) == INT32_MIN);
+    }
+    assert(floatToFrame(std::numeric_limits<float>::quiet_NaN()) == 0);
+    std::cout << "PASS float PCM: nearest rounding, ties away from zero, full-scale/overs saturation, NaN "
+                 "silence\n";
+
     Ring<int> ring(17);
     std::deque<int> reference;
     std::mt19937 random(17);

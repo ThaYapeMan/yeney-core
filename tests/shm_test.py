@@ -153,7 +153,9 @@ class ShmTests(unittest.TestCase):
         self.exercise_tracks()
 
     def test_03_real_lampastream_consumer(self):
-        checkout = ROOT.parent / 'LampaStream'
+        checkout = Path(os.environ.get('LAMPASTREAM_CHECKOUT', ROOT.parent / 'LampaStream'))
+        if 'LAMPASTREAM_CHECKOUT' in os.environ:
+            self.assertTrue(checkout.is_dir(), 'explicit LampaStream checkout missing')
         if not checkout.exists():
             alias = ROOT.parent / 'SqueezeHue'
             if alias.exists():

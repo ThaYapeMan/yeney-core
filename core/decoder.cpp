@@ -7,11 +7,13 @@
 #include "decoder.h"
 #include "mp4.h"
 #include "ring.h"
+#include "sample_conversion.h"
 #include "third_party/alac/codec/ALACBitUtilities.h"
 #include "third_party/alac/codec/ALACDecoder.h"
 #include <FLAC/stream_decoder.h>
 #define MINIMP3_IMPLEMENTATION
 #define MINIMP3_ONLY_MP3
+#define MINIMP3_FLOAT_OUTPUT
 #include "third_party/minimp3/minimp3.h"
 #include <algorithm>
 #include <cmath>
@@ -489,13 +491,13 @@ class Mp3Worker : public Worker {
                 }
             }
             if (frames && !tag) {
-                Format format{uint32_t(info.hz), 16, unsigned(info.channels), false};
+                Format format{uint32_t(info.hz), 32, unsigned(info.channels), false};
                 setFormat(format);
                 hadAudio = true;
                 for (int i = 0; i < frames; ++i, ++decoded)
                     if (decoded >= begin && decoded < end) {
-                        Frame f{int32_t(pcm[i * info.channels]) * 65536,
-                                int32_t(pcm[i * info.channels + (info.channels == 1 ? 0 : 1)]) * 65536};
+                        Frame f{detail::floatToFrame(pcm[i * info.channels]),
+                                detail::floatToFrame(pcm[i * info.channels + (info.channels == 1 ? 0 : 1)])};
                         if (end == UINT64_MAX && tailPadding) {
                             tail.push_back(f);
                             if (tail.size() > tailPadding) {

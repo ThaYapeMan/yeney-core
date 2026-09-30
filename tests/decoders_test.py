@@ -317,6 +317,18 @@ class DecoderTests(unittest.TestCase):
             self.assertNotIn(b'AddressSanitizer', result.stderr)
             self.assertNotIn(b'runtime error:', result.stderr)
 
+    def assert_mp3_precision(self, actual, expected, data):
+        self.assertEqual(len(actual), len(expected))
+        energy = sum(x*x for x in expected)
+        error = sum((x-y)**2 for x,y in zip(actual,expected))
+        snr = 10*math.log10(energy/error) if error else math.inf
+        self.assertGreater(snr, 110)
+        values = [v[0] for v in struct.iter_unpack('<i', data)]
+        self.assertTrue(any(v & 0xffff for v in values))
+        quantised = [max(-32768,min(32767,math.copysign(math.floor(abs(v)/65536+.5),v)))*65536 for v in values]
+        self.assertNotEqual(values, quantised)
+        print(f'PASS MP3 float reference: SNR={snr:.2f} dB (>110); low bits retained; int16 round trip changes samples', flush=True)
+
     def test_05_mp3_gapless_continuous_signal(self):
         if not FFMPEG:
             print('SKIP generated MP3 gapless reference: ffmpeg unavailable or generation disabled; testing both committed track references', flush=True)
@@ -326,11 +338,11 @@ class DecoderTests(unittest.TestCase):
                 pcm, _ = self.decode('m', file.read_bytes())
                 self.assertEqual(len(pcm), count * 8)
                 decoded.extend(pcm)
-                references.extend(zlib.decompress(file.with_suffix('.reference.zlib').read_bytes()))
-            actual = [v[0] >> 16 for v in struct.iter_unpack('<i', decoded)]
-            expected = [v[0] for v in struct.iter_unpack('<h', references)]
+                references.extend(zlib.decompress(file.with_suffix('.float-reference.zlib').read_bytes()))
+            actual = [v[0] / 2147483648.0 for v in struct.iter_unpack('<i', decoded)]
+            expected = [v[0] for v in struct.iter_unpack('<f', references)]
             self.assertEqual(len(decoded), 15019 * 8)
-            self.assertLess(math.sqrt(sum((a-b)**2 for a,b in zip(actual, expected))/len(actual)), 3)
+            self.assert_mp3_precision(actual, expected, decoded)
             print('PASS committed MP3 gapless: 7013 + 8006 = 15019 frames', flush=True)
             with Session() as s:
                 first = (ROOT / 'tests/fixtures/gapless-0.mp3').read_bytes()
@@ -340,7 +352,7 @@ class DecoderTests(unittest.TestCase):
                 s.lms.strm('s', s.source(second), fmt='m')
                 s.lms.wait('STMu')
                 self.assertEqual(s.data(), bytes(decoded))
-                self.assertIn('boundary 7013 44100 16 2 1', s.events())
+                self.assertIn('boundary 7013 44100 32 2 1', s.events())
 
             return
         split, total = 7013, 15019
@@ -353,20 +365,18 @@ class DecoderTests(unittest.TestCase):
             dest = self.dir / f'{start}.mp3'
             run([FFMPEG, '-v', 'error', '-f', 's16le', '-ar', '44100', '-ac', '2', '-i', source, '-c:a', 'libmp3lame', '-b:a', '192k', '-y', dest])
             ref = self.dir / 'mp3.ref'
-            run([FFMPEG, '-v', 'error', '-i', dest, '-f', 's16le', '-y', ref])
+            run([FFMPEG, '-v', 'error', '-c:a', 'mp3float', '-i', dest, '-f', 'f32le', '-y', ref])
             encoded_tracks.append(dest.read_bytes())
             decoded, _ = self.decode('m', dest.read_bytes())
             self.assertEqual(len(decoded), count * 8)
             joined.extend(decoded)
             reference.extend(ref.read_bytes())
         self.assertEqual(len(joined), total * 8)
-        actual = [v[0] >> 16 for v in struct.iter_unpack('<i', joined)]
-        expected = [v[0] for v in struct.iter_unpack('<h', reference)]
+        actual = [v[0] / 2147483648.0 for v in struct.iter_unpack('<i', joined)]
+        expected = [v[0] for v in struct.iter_unpack('<f', reference)]
         self.assertEqual(len(actual), len(expected))
-        rms = math.sqrt(sum((a - b) ** 2 for a, b in zip(actual, expected)) / len(actual))
-        self.assertLess(rms, 3)
-        self.assertLess(max(abs(a - b) for a, b in zip(actual[split * 2 - 64:split * 2 + 64], expected[split * 2 - 64:split * 2 + 64])), 8)
-        print(f'PASS MP3 gapless: {split} + {total - split} = {total} frames; reference RMS {rms:.3f} int16 units', flush=True)
+        self.assert_mp3_precision(actual, expected, joined)
+        print(f'PASS MP3 gapless: {split} + {total - split} = {total} frames; float reference', flush=True)
         with Session() as s:
             s.lms.strm('s', s.source(encoded_tracks[0]), fmt='m')
             s.lms.wait('STMd')
@@ -374,8 +384,19 @@ class DecoderTests(unittest.TestCase):
             s.lms.wait('STMu')
             self.assertEqual(s.data(), bytes(joined))
             boundaries = [e for e in s.events() if e.startswith('boundary')]
-            self.assertEqual(boundaries, ['boundary 0 44100 16 2 0', f'boundary {split} 44100 16 2 1'])
+            self.assertEqual(boundaries, ['boundary 0 44100 32 2 0', f'boundary {split} 44100 32 2 1'])
 
+
+    def test_10_committed_mp3_precision(self):
+        for start, count in ((0, 7013), (7013, 8006)):
+            file = ROOT / 'tests/fixtures' / f'gapless-{start}.mp3'
+            decoded, description = self.decode('m', file.read_bytes())
+            self.assertEqual(len(decoded), count * 8)
+            self.assertIn('FORMAT 44100 32 2', description)
+            actual = [v[0] / 2147483648.0 for v in struct.iter_unpack('<i', decoded)]
+            reference = zlib.decompress(file.with_suffix('.float-reference.zlib').read_bytes())
+            expected = [v[0] for v in struct.iter_unpack('<f', reference)]
+            self.assert_mp3_precision(actual, expected, decoded)
 
     def test_06_fake_lms_decoder_dispatch(self):
         raw, expected = signal_data(3000)

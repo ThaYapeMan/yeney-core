@@ -12,3 +12,5 @@ __pycache__/
 /demux-sanitized
 
 /shm-unit
+
+/decoder-benchmark

@@ -62,7 +62,7 @@ test: format-check shm-unit all unit-test test-player decoder-test demux-sanitiz
 	python3 tests/transitions_test.py
 
 clean:
-	rm -f $(CORE_OBJS) $(APP_OBJS) $(TEST_OBJS) $(CORE_OBJS:.o=.d) $(APP_OBJS:.o=.d) $(TEST_OBJS:.o=.d) libyeneycore.a yeney-player unit-test test-player decoder-test demux-sanitized shm-unit
+	rm -f $(CORE_OBJS) $(APP_OBJS) $(TEST_OBJS) $(CORE_OBJS:.o=.d) $(APP_OBJS:.o=.d) $(TEST_OBJS:.o=.d) libyeneycore.a yeney-player unit-test test-player decoder-test demux-sanitized shm-unit decoder-benchmark decoder-benchmark.d
 
 -include $(CORE_OBJS:.o=.d) $(APP_OBJS:.o=.d) $(TEST_OBJS:.o=.d)
 .PHONY: all clean test format format-check
@@ -73,3 +73,6 @@ format:
 	$(CLANG_FORMAT) -i $(OWN_SOURCES)
 format-check:
 	$(CLANG_FORMAT) --dry-run --Werror $(OWN_SOURCES)
+
+decoder-benchmark: tests/decoder_benchmark.cpp libyeneycore.a
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ $^ $(LDLIBS)

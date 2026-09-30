@@ -75,7 +75,13 @@ https://xiph.org/flac/api/group__flac__stream__decoder.html.
 Wire code `m` uses unmodified minimp3 at commit
 `ea99364f61c14656440e8d77e9c233ccf3124633`. ID3v2's synchsafe length and optional
 footer are skipped without buffering the whole tag. MP3 mono/stereo output is
-16-bit decoded PCM, left-aligned to int32. ID3v1 at EOF is also accepted.
+minimp3 float synthesis (`MINIMP3_FLOAT_OUTPUT`), converted to normalised int32.
+Each sample is multiplied by 2^31 in double precision and rounded to nearest,
+with ties away from zero. Values at or above +1 saturate to INT32_MAX; values
+at or below -1 saturate to INT32_MIN. This includes unclipped overs from hot
+masters and infinities; defensive NaN handling produces silence. Format reports
+32-bit frames, without an intermediate int16 quantisation. The SHM sink retains
+its existing int16 rounding. ID3v1 at EOF is also accepted.
 
 The first MPEG frame is inspected at its version/channel-dependent side-info
 boundary for Xing/Info. Its flags determine optional fields; the encoder
@@ -168,3 +174,12 @@ skipping generation. Missing clang-format is a test failure, not a silent pass.
 All network tests stay on localhost; no production LMS or deployment is used.
 Clone with `--recurse-submodules`, and distribute THIRD_PARTY_NOTICES plus the
 ALAC licence/attribution alongside binaries. YeneY and LampaStream are unchanged.
+
+Run `make decoder-benchmark && ./decoder-benchmark` for five trials over both
+committed MP3 fixtures (100 repetitions per trial). It reports process CPU and
+wall time for the public decoder pipeline, including worker and queue overhead;
+no PCM file writing is timed. Gapless counts are checked in every trial.
+
+The cross-repository SHM test normally finds a sibling LampaStream checkout.
+Set `LAMPASTREAM_CHECKOUT=/path/to/LampaStream` to use another real checkout,
+including a temporary clone; its consumer remains unmodified.
