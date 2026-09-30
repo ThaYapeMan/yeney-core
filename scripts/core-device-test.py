@@ -6,60 +6,70 @@
 """core-device-test.py -- unattended real-LMS test of yeney-player.
 
 Starts ./yeney-player as a silent test player ("Core test"), lets Lyrion play a
-fixed set of tracks on it and checks, per track, via the LMS CLI and the
-player's own event log:
+fixed set of tracks on it, and checks per track, using the LMS CLI, the
+player's event log and a capture of the Slimproto traffic (TCP 3483):
 
   play    the track starts and LMS position advances at real-time speed
+  format  what LMS actually sent (strm format code: f=FLAC, l=ALAC, m=MP3,
+          p=PCM/AIFF) matches the expectation for this file, and the audio
+          arrives at <= 48 kHz
   seek    a jump to the middle lands there and keeps advancing
   pause   position freezes while paused
   resume  position advances again after resume
   clean   no STMn / error lines from the player for this track
 
-Run on the bridge host from the yeney-core checkout, after `make`:
+Setup checks: the player connects, and its HELO advertises the expected
+formats. Run as root on the bridge host from the yeney-core checkout after
+`make` (tcpdump needs root; --no-capture skips it):
 
-  python3 scripts/core-device-test.py [--lms <host>] [--keep-player]
+  python3 scripts/core-device-test.py [--lms <host>] [--no-capture] [--keep-player]
 
-Results go to /tmp/core-test-<timestamp>/ (report.txt, player.log,
-lms-status.log). Exit status 0 only if every check passes.
-
-Tracks: edit TRACKS below. A spec is either "id:<n>" or a title search; the
-first match with the expected LMS content type (and, for hi-res, a sample rate
-above 48 kHz) is used. Every match considered is written to the report.
+Everything is written to /tmp/core-test-<timestamp>/ and packed into
+/tmp/core-test-<timestamp>.tar.gz: report.txt, player.log, lms-status.log,
+lms-events.log, slimproto.pcap, slimproto.txt (decoded capture), run-info.txt.
+Exit status 0 only if every check passes.
 """
 import argparse
 import os
 import re
+import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 import urllib.parse
 
-# (label, search text or "id:<n>", LMS content type, minimum sample rate)
+# (label, LMS track id, expected LMS content type)
 TRACKS = [
-    ("ALAC", "id:47145", "alc", 0),            # The Lady Is A Tramp (Duets II)
-    ("MP3", "Crowd Control (Original Mix)", "mp3", 0),
-    ("FLAC", "id:44436", "flc", 0),            # Just A Little Bit More (Extended)
-    ("ALAC hi-res", "Sharp Dressed Man", "alc", 48001),
+    ("ALAC", "47145", "alc"),          # The Lady Is A Tramp (Ft. Lady Gaga) - Duets II
+    ("MP3", "41965", "mp3"),           # Crowd Control (Original Mix)
+    ("FLAC", "44436", "flc"),          # Just A Little Bit More (Extended)
+    ("ALAC hi-res", "47797", "alc"),   # Sharp Dressed Man - ZZ Top - Eliminator
 ]
+EXPECTED_CAPS = ["flc", "alc", "mp3", "aif", "pcm"]
+MAX_RATE = 48000
 
 PLAYER_NAME = "Core test"
 PLAYER_MAC = "02:00:00:00:be:03"
 CLI_PORT = 9090
+SLIM_PORT = 3483
 
 PLAY_SECS = 12      # measure normal playback over this many seconds
 SEEK_TO = 60        # seconds; capped at half the track duration
 PAUSE_SECS = 5
 RATE_MIN, RATE_MAX = 0.85, 1.15   # accepted LMS-time / wall-time ratio
+FORMAT_NAMES = {"f": "FLAC", "l": "ALAC", "m": "MP3", "p": "PCM/AIFF", "o": "Ogg", "a": "AAC", "?": "unknown"}
 
-
-# ---------------------------------------------------------------- helpers --
 
 def now():
     return time.strftime("%H:%M:%S")
 
+
+# -------------------------------------------------------------- LMS CLI --
 
 class Cli:
     def __init__(self, host):
@@ -91,16 +101,52 @@ class Cli:
         return None
 
     @classmethod
-    def records(cls, reply, start="id"):
-        out, cur = [], None
+    def fields(cls, reply):
+        out = {}
         for t in cls.tokens(reply):
-            k, _, v = t.partition(":")
-            if k == start:
-                cur = {}
-                out.append(cur)
-            if cur is not None and _:
-                cur.setdefault(k, v)
+            k, sep, v = t.partition(":")
+            if sep:
+                out.setdefault(k, v)
         return out
+
+
+class EventListener:
+    """Keeps an LMS CLI 'listen 1' connection and logs every event line."""
+
+    def __init__(self, host, path):
+        self.log = open(path, "w")
+        self.sock = None
+        try:
+            self.sock = socket.create_connection((host, CLI_PORT), timeout=5)
+            self.sock.sendall(b"listen 1\n")
+            self.sock.settimeout(1)
+            threading.Thread(target=self._run, daemon=True).start()
+        except OSError as e:
+            self.log.write(f"[{now()}] listen failed: {e}\n")
+
+    def _run(self):
+        buf = b""
+        while self.sock:
+            try:
+                chunk = self.sock.recv(65536)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                text = " ".join(Cli.tokens(line.decode("utf-8", "replace").strip()))
+                self.log.write(f"[{now()}] {text}\n")
+                self.log.flush()
+
+    def stop(self):
+        s, self.sock = self.sock, None
+        if s:
+            s.close()
+        self.log.close()
 
 
 def lms_host_from_config():
@@ -112,6 +158,8 @@ def lms_host_from_config():
         pass
     return None
 
+
+# ------------------------------------------------------ player process --
 
 class PlayerProcess:
     """Runs yeney-player and keeps its event lines with timestamps."""
@@ -135,9 +183,9 @@ class PlayerProcess:
             self.log.write(f"[{now()}] {line}\n")
             self.log.flush()
 
-    def since(self, t0):
+    def since(self, t0, t1=None):
         with self.lock:
-            return [l for (t, l) in self.lines if t >= t0]
+            return [l for (t, l) in self.lines if t >= t0 and (t1 is None or t <= t1)]
 
     def stop(self):
         if self.proc.poll() is None:
@@ -149,12 +197,168 @@ class PlayerProcess:
         self.log.close()
 
 
-# ------------------------------------------------------------------- test --
+# ------------------------------------------------------------- capture --
+
+class Capture:
+    """tcpdump of the Slimproto connection between LMS and the test player."""
+
+    def __init__(self, lms, path):
+        self.path, self.proc, self.error = path, None, None
+        if not shutil.which("tcpdump"):
+            self.error = "tcpdump not installed (apt-get install -y tcpdump)"
+            return
+        dev = "any"
+        try:
+            route = subprocess.run(["ip", "route", "get", lms], capture_output=True, text=True).stdout
+            m = re.search(r"\bdev (\S+)", route)
+            dev = m.group(1) if m else "any"
+        except OSError:
+            pass
+        self.err = open(path + ".err", "w")
+        self.proc = subprocess.Popen(
+            ["tcpdump", "-i", dev, "-s", "0", "-U", "-w", path, f"host {lms} and tcp port {SLIM_PORT}"],
+            stdout=subprocess.DEVNULL, stderr=self.err)
+        time.sleep(1.5)
+        if self.proc.poll() is not None:
+            self.error = f"tcpdump exited ({self.proc.returncode}); see {os.path.basename(path)}.err"
+            self.proc = None
+
+    def stop(self):
+        if self.proc and self.proc.poll() is None:
+            time.sleep(1)
+            self.proc.send_signal(signal.SIGINT)
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+
+
+def read_pcap(path):
+    """Yield (time, src, sport, dst, dport, seq, payload) for TCP/IPv4 packets."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if len(data) < 24:
+        return
+    magic = data[:4]
+    if magic in (b"\xd4\xc3\xb2\xa1", b"\x4d\x3c\xb2\xa1"):
+        e, nano = "<", magic == b"\x4d\x3c\xb2\xa1"
+    elif magic in (b"\xa1\xb2\xc3\xd4", b"\xa1\xb2\x3c\x4d"):
+        e, nano = ">", magic == b"\xa1\xb2\x3c\x4d"
+    else:
+        raise ValueError("not a pcap file")
+    linktype = struct.unpack(e + "I", data[20:24])[0]
+    pos = 24
+    while pos + 16 <= len(data):
+        sec, frac, incl, _ = struct.unpack(e + "IIII", data[pos:pos + 16])
+        pkt = data[pos + 16:pos + 16 + incl]
+        pos += 16 + incl
+        ts = sec + frac / (1e9 if nano else 1e6)
+        if linktype == 1:            # Ethernet
+            off, proto = 14, pkt[12:14]
+            if proto == b"\x81\x00":
+                off, proto = 18, pkt[16:18]
+        elif linktype == 113:        # Linux cooked (SLL)
+            off, proto = 16, pkt[14:16]
+        elif linktype == 276:        # Linux cooked v2 (SLL2)
+            off, proto = 20, pkt[0:2]
+        else:
+            continue
+        if proto != b"\x08\x00" or len(pkt) < off + 20:
+            continue
+        ip = pkt[off:]
+        ihl = (ip[0] & 15) * 4
+        total = struct.unpack(">H", ip[2:4])[0]
+        if ip[9] != 6:
+            continue
+        src, dst = socket.inet_ntoa(ip[12:16]), socket.inet_ntoa(ip[16:20])
+        tcp = ip[ihl:total]
+        if len(tcp) < 20:
+            continue
+        sport, dport, seq = struct.unpack(">HHI", tcp[:8])
+        doff = (tcp[12] >> 4) * 4
+        payload = tcp[doff:]
+        if payload:
+            yield ts, src, sport, dst, dport, seq, payload
+
+
+def slimproto_messages(path, lms):
+    """Decode both directions of every Slimproto connection in the capture.
+
+    Returns a list of (time, direction, opcode, payload), direction 'S>P' for
+    LMS to player and 'P>S' for player to LMS, in time order.
+    """
+    flows = {}
+    for ts, src, sport, dst, dport, seq, payload in read_pcap(path):
+        key = (src, sport, dst, dport)
+        flows.setdefault(key, {})
+        flows[key].setdefault(seq, (ts, payload))
+    messages = []
+    for (src, sport, dst, dport), segs in flows.items():
+        to_player = src == lms and sport == SLIM_PORT
+        stream, times = b"", []
+        expected = None
+        for seq in sorted(segs):
+            ts, payload = segs[seq]
+            if expected is not None and seq < expected:
+                payload = payload[expected - seq:]
+                if not payload:
+                    continue
+            stream += payload
+            times.extend([ts] * len(payload))
+            expected = seq + len(segs[seq][1])
+        pos = 0
+        while True:
+            if to_player:
+                if pos + 6 > len(stream):
+                    break
+                length = struct.unpack(">H", stream[pos:pos + 2])[0]
+                if length < 4 or pos + 2 + length > len(stream):
+                    break
+                op = stream[pos + 2:pos + 6].decode("latin-1")
+                body = stream[pos + 6:pos + 2 + length]
+                messages.append((times[pos], "S>P", op, body))
+                pos += 2 + length
+            else:
+                if pos + 8 > len(stream):
+                    break
+                op = stream[pos:pos + 4].decode("latin-1")
+                length = struct.unpack(">I", stream[pos + 4:pos + 8])[0]
+                if pos + 8 + length > len(stream):
+                    break
+                body = stream[pos + 8:pos + 8 + length]
+                messages.append((times[pos], "P>S", op, body))
+                pos += 8 + length
+    return sorted(messages, key=lambda m: m[0])
+
+
+def describe(message):
+    ts, direction, op, body = message
+    stamp = time.strftime("%H:%M:%S", time.localtime(ts)) + f".{int(ts * 1000) % 1000:03d}"
+    text = f"[{stamp}] {direction} {op}"
+    if op == "strm" and len(body) >= 24:
+        cmd, auto, fmt, size, rate, chans, endian = (chr(b) for b in body[:7])
+        gain = struct.unpack(">I", body[14:18])[0]
+        text += f" cmd={cmd} autostart={auto} format={fmt} pcm={size}/{rate}/{chans}/{endian} gain={gain}"
+        request = body[24:].split(b"\r\n", 1)[0].decode("latin-1")
+        if request:
+            text += f" request='{request}'"
+    elif op == "STAT" and len(body) >= 4:
+        text += " " + body[:4].decode("latin-1")
+    elif op == "HELO":
+        caps = body[36:].decode("latin-1", "replace") if len(body) > 36 else ""
+        text += f" caps={caps}"
+    elif op == "RESP":
+        text += " " + " | ".join(body.decode("latin-1", "replace").strip().split("\r\n")[:6])
+    return text
+
+
+# ----------------------------------------------------------------- test --
 
 class Run:
     def __init__(self, cli, player, outdir):
         self.cli, self.player, self.outdir = cli, player, outdir
         self.results = []   # (track, check, ok, detail)
+        self.phases = []    # (label, start, end, songinfo)
         self.report = open(os.path.join(outdir, "report.txt"), "w")
         self.status_log = open(os.path.join(outdir, "lms-status.log"), "w")
 
@@ -181,7 +385,6 @@ class Run:
         return mode, t, tid
 
     def measure(self, secs):
-        """LMS time advance over `secs` wall seconds (sampled every second)."""
         _, t0, _ = self.status()
         w0 = time.time()
         for _ in range(int(secs)):
@@ -201,60 +404,38 @@ class Run:
             time.sleep(1)
         return False
 
-    def resolve(self, label, spec, ctype, min_rate):
-        if spec.startswith("id:"):
-            r = self.cli.raw(f"songinfo 0 100 track_id:{spec[3:]} tags:aloTd")
-            rec = {k: v for k, _, v in (t.partition(":") for t in Cli.tokens(r)) if _}
-            rec["id"] = spec[3:]
-            self.say(f"{label}: using id {rec['id']} ({rec.get('title')}, {rec.get('type')})")
-            return rec
-        r = self.cli.raw(f"titles 0 50 search:{urllib.parse.quote(spec)} tags:aloTd")
-        matches = Cli.records(r)
-        self.say(f"{label}: search '{spec}' -> {len(matches)} match(es)")
-        chosen = None
-        for m in matches:
-            rate = int(m.get("samplerate") or 0)
-            fits = m.get("type") == ctype and rate >= min_rate
-            self.say(f"    id {m.get('id')}: {m.get('title')} / {m.get('artist')} / "
-                     f"{m.get('album')} type={m.get('type')} rate={rate}"
-                     f"{'  <- chosen' if fits and not chosen else ''}")
-            if fits and not chosen:
-                chosen = m
-        return chosen
-
-    def track(self, label, spec, ctype, min_rate):
-        self.say(f"=== {label}")
-        rec = self.resolve(label, spec, ctype, min_rate)
-        if not rec:
-            self.check(label, "found", False,
-                       f"no match with type={ctype}" + (f" and rate>={min_rate}" if min_rate else ""))
+    def track(self, label, track_id, ctype):
+        self.say(f"=== {label} (id {track_id})")
+        info = Cli.fields(self.cli.raw(f"songinfo 0 100 track_id:{track_id} tags:aloTd"))
+        if not info.get("title"):
+            self.check(label, "found", False, f"LMS has no track with id {track_id}")
             return
-        duration = float(rec.get("duration") or 0)
+        rate = int(info.get("samplerate") or 0)
+        self.say(f"  {info.get('title')} / {info.get('artist')} / {info.get('album')}; "
+                 f"type={info.get('type')} rate={rate} duration={info.get('duration')}")
+        if info.get("type") != ctype:
+            self.say(f"  NOTE expected type {ctype}, LMS reports {info.get('type')}")
+        duration = float(info.get("duration") or 0)
         t_start = time.time()
 
-        # play
-        self.cli.player(f"playlistcontrol cmd:load track_id:{rec['id']}")
-        started = self.wait_playing()
-        if not started:
+        self.cli.player(f"playlistcontrol cmd:load track_id:{track_id}")
+        if not self.wait_playing():
             self.check(label, "play", False, "LMS never reached play with advancing time")
-            self.clean(label, t_start)
+            self.finish_phase(label, t_start, info)
             return
         adv, wall, t0, t1 = self.measure(PLAY_SECS)
         ratio = adv / wall if wall else 0
         self.check(label, "play", RATE_MIN <= ratio <= RATE_MAX,
                    f"{t0:.1f}s -> {t1:.1f}s in {wall:.1f}s wall (ratio {ratio:.2f})")
 
-        # seek
         target = min(SEEK_TO, duration / 2) if duration else SEEK_TO
         self.cli.player(f"time {target:.0f}")
         time.sleep(4)
-        mode, t_after, _ = self.status()
+        mode, _, _ = self.status()
         adv, wall, t0, t1 = self.measure(5)
-        ok = mode == "play" and target - 1 <= t0 <= target + 8 and adv >= 3
-        self.check(label, "seek", ok,
+        self.check(label, "seek", mode == "play" and target - 1 <= t0 <= target + 8 and adv >= 3,
                    f"target {target:.0f}s, at {t0:.1f}s after 4s, then +{adv:.1f}s in {wall:.1f}s")
 
-        # pause
         self.cli.player("pause 1")
         time.sleep(2)
         _, p0, _ = self.status()
@@ -263,28 +444,68 @@ class Run:
         self.check(label, "pause", mode == "pause" and abs(p1 - p0) < 0.5,
                    f"mode={mode}, {p0:.1f}s -> {p1:.1f}s over {PAUSE_SECS}s")
 
-        # resume
         self.cli.player("pause 0")
         time.sleep(3)
         adv, wall, t0, t1 = self.measure(5)
         mode, _, _ = self.status()
         self.check(label, "resume", mode == "play" and adv >= 3.5 and t0 >= p1 - 0.5,
                    f"from {p1:.1f}s: {t0:.1f}s -> {t1:.1f}s (+{adv:.1f}s in {wall:.1f}s)")
+        self.finish_phase(label, t_start, info)
 
-        self.clean(label, t_start)
-
-    def clean(self, label, t_start):
-        lines = self.player.since(t_start)
+    def finish_phase(self, label, t_start, info):
+        t_end = time.time()
+        self.phases.append((label, t_start, t_end, info))
+        lines = self.player.since(t_start, t_end)
         bad = [l for l in lines if re.search(r"\bSTMn\b|error|unsupported", l, re.I)]
         rates = sorted({m.group(1) for l in lines for m in [re.search(r"rate=(\d+)", l)] if m})
         self.check(label, "clean", not bad,
                    ("no STMn/error lines" if not bad else f"{len(bad)} line(s), first: {bad[0]}")
                    + (f"; stream rate(s) {', '.join(rates)} Hz" if rates else ""))
+        high = [r for r in rates if int(r) > MAX_RATE]
+        if high:
+            self.check(label, "rate", False, f"audio arrived above {MAX_RATE} Hz: {', '.join(high)}")
+
+    def analyse_capture(self, pcap, lms):
+        try:
+            messages = slimproto_messages(pcap, lms)
+        except (OSError, ValueError) as e:
+            self.check("capture", "decode", False, str(e))
+            return
+        with open(os.path.join(self.outdir, "slimproto.txt"), "w") as f:
+            for m in messages:
+                f.write(describe(m) + "\n")
+        helos = [m for m in messages if m[2] == "HELO"]
+        if helos:
+            caps = helos[0][3][36:].decode("latin-1", "replace")
+            formats = [c for c in caps.split(",") if "=" not in c]
+            self.check("setup", "caps", formats == EXPECTED_CAPS,
+                       f"advertised {','.join(formats)} (expected {','.join(EXPECTED_CAPS)})")
+        else:
+            self.check("setup", "caps", False, "no HELO in the capture")
+        for label, t0, t1, info in self.phases:
+            starts = [m for m in messages if m[2] == "strm" and m[1] == "S>P"
+                      and len(m[3]) >= 24 and chr(m[3][0]) == "s" and t0 <= m[0] <= t1]
+            if not starts:
+                self.check(label, "format", False, "no strm start seen in the capture")
+                continue
+            codes = [chr(m[3][2]) for m in starts]
+            rate = int(info.get("samplerate") or 0)
+            ctype = info.get("type")
+            native = {"flc": "f", "alc": "l", "mp3": "m", "aif": "p", "wav": "p"}.get(ctype)
+            if rate > MAX_RATE:
+                ok = all(c in "fp" for c in codes)
+                expect = f"f or p (LMS converts {rate} Hz to <= {MAX_RATE} Hz)"
+            else:
+                ok = native is not None and all(c == native for c in codes)
+                expect = f"{native} (native {ctype})"
+            names = ", ".join(f"{c}={FORMAT_NAMES.get(c, '?')}" for c in codes)
+            self.check(label, "format", ok, f"LMS sent {names}; expected {expect}")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--lms", default=None, help="LMS host (default: /etc/yeney/config)")
+    ap.add_argument("--no-capture", action="store_true", help="skip the tcpdump capture")
     ap.add_argument("--keep-player", action="store_true",
                     help="do not remove the test player from LMS afterwards")
     args = ap.parse_args()
@@ -300,13 +521,22 @@ def main():
     except OSError as e:
         sys.exit(f"LMS CLI not reachable on {lms}:{CLI_PORT}: {e}")
 
-    outdir = time.strftime("/tmp/core-test-%Y%m%d-%H%M%S")
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    outdir = f"/tmp/core-test-{stamp}"
     os.makedirs(outdir)
+    build = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+    with open(os.path.join(outdir, "run-info.txt"), "w") as f:
+        f.write(f"yeney-core={build or '?'}\nlms={lms}\nplayer={PLAYER_NAME} {PLAYER_MAC}\n"
+                f"tracks={' '.join(t[1] for t in TRACKS)}\nstarted={time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+
+    pcap = os.path.join(outdir, "slimproto.pcap")
+    capture = None if args.no_capture else Capture(lms, pcap)
+    events = EventListener(lms, os.path.join(outdir, "lms-events.log"))
     player = PlayerProcess(lms, os.path.join(outdir, "player.log"))
     run = Run(cli, player, outdir)
-    build = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
-                           capture_output=True, text=True).stdout.strip()
     run.say(f"yeney-core {build or '?'}; LMS {lms}; player {PLAYER_NAME} ({PLAYER_MAC})")
+    if capture and capture.error:
+        run.say(f"capture disabled: {capture.error}")
 
     try:
         for _ in range(20):
@@ -315,30 +545,45 @@ def main():
             time.sleep(0.5)
         else:
             run.check("setup", "connect", False, "player did not appear in LMS within 10 s")
-            raise SystemExit
-        run.say("player connected to LMS")
+            raise KeyboardInterrupt
+        run.check("setup", "connect", True, "player registered with LMS")
         for spec in TRACKS:
             run.track(*spec)
     except KeyboardInterrupt:
-        run.say("interrupted")
+        run.say("stopped early")
     finally:
         try:
             cli.player("stop")
         except OSError:
             pass
+        time.sleep(1)
         player.stop()
+        if capture:
+            capture.stop()
+        events.stop()
         if not args.keep_player:
             try:
                 cli.player("client forget")
             except OSError:
                 pass
 
+    if capture and not capture.error and os.path.exists(pcap):
+        run.analyse_capture(pcap, lms)
+
     failed = [r for r in run.results if not r[2]]
     run.say("")
-    run.say("track        | check  | result")
-    for track, name, ok, detail in run.results:
-        run.say(f"{track:<12} | {name:<6} | {'PASS' if ok else 'FAIL'}")
-    run.say(f"{len(run.results) - len(failed)}/{len(run.results)} checks passed; results in {outdir}")
+    run.say("track        | check   | result")
+    for track, name, ok, _ in run.results:
+        run.say(f"{track:<12} | {name:<7} | {'PASS' if ok else 'FAIL'}")
+    run.say(f"{len(run.results) - len(failed)}/{len(run.results)} checks passed")
+    with open(os.path.join(outdir, "run-info.txt"), "a") as f:
+        f.write(f"finished={time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    run.report.close()
+    run.status_log.close()
+    tarball = f"{outdir}.tar.gz"
+    with tarfile.open(tarball, "w:gz") as tar:
+        tar.add(outdir, arcname=os.path.basename(outdir))
+    print(f"Tarball: {tarball}", flush=True)
     sys.exit(0 if run.results and not failed else 1)
 
 
