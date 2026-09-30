@@ -132,6 +132,7 @@ struct Player::Impl {
     uint64_t contentLength = std::numeric_limits<uint64_t>::max();
     std::string headers;
     bool controlConnecting = false, httpConnecting = false, haveHeaders = false, everConnected = false;
+    bool submittedSinceFlush = false;
     bool paused = false, playing = false, userPaused = false, ended = true, underrun = false, power = true;
     uint32_t wake = 0, lastTick = 0, lastStat = 0, nextConnect = 0, connectDeadline = 0, httpDeadline = 0,
              nextDiscovery = 0;
@@ -184,6 +185,7 @@ struct Player::Impl {
         request.clear();
     }
     void clear(bool stop) {
+        submittedSinceFlush = false;
         stopStream();
         fetching.reset();
         output.clear();
@@ -214,6 +216,7 @@ struct Player::Impl {
         overlap = {};
     }
     void flushStreaming() {
+        submittedSinceFlush = false;
         stopStream();
         cancelOverlap();
         std::shared_ptr<Track> retained;
@@ -409,6 +412,8 @@ struct Player::Impl {
             if (n < 28)
                 throw std::runtime_error("short strm");
             uint32_t value = be32(b.data() + 18);
+            if (cfg.observeCommand)
+                cfg.observeCommand({char(b[4]), value, playing && !paused && submittedSinceFlush});
             switch (b[4]) {
             case 't':
                 stat("STMt", value);
@@ -702,7 +707,7 @@ struct Player::Impl {
         }
     }
     void audibleEvents() {
-        uint64_t position = sink.audibleFrames();
+        uint64_t position = cfg.startOnSubmit ? submitted : sink.audibleFrames();
         while (!boundaries.empty() && position > boundaries.front()->first) {
             audible = boundaries.front();
             boundaries.pop_front();
@@ -850,6 +855,8 @@ struct Player::Impl {
                 }
             }
             submitted += accepted;
+            if (accepted)
+                submittedSinceFlush = true;
             if (sink.paced())
                 credit -= double(accepted) / t->format.rate;
             audibleEvents();
@@ -858,8 +865,8 @@ struct Player::Impl {
             underrun = false;
         }
         audibleEvents();
-        if (queued == 0 && fetching && fetching->decoded && output.empty() &&
-            sink.audibleFrames() >= submitted && !ended) {
+        if (queued == 0 && fetching && fetching->decoded && output.empty() && sink.drained(submitted) &&
+            !ended) {
             sink.idle();
             stat("STMu");
             ended = true;

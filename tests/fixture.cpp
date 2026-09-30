@@ -108,6 +108,10 @@ int main(int argc, char **argv) {
         cfg.streamBytes = 32768;
         cfg.outputFrames = 96000;
         cfg.log = [](const std::string &s) { std::cout << s << std::endl; };
+        if (std::getenv("YENEY_TEST_OBSERVER"))
+            cfg.observeCommand = [](const yeney::Command &c) {
+                std::cout << "observe " << c.letter << ' ' << c.value << ' ' << c.playing << std::endl;
+            };
         RecordingSink sink(argv[3], argc == 5 ? argv[4] : "normal");
         std::signal(SIGINT, signalStop);
         std::signal(SIGTERM, signalStop);

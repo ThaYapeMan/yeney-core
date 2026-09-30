@@ -188,3 +188,20 @@ Validation uses fake LMS on localhost, not a running production LMS. FLAC/MP3,
 ReplayGain, fades, crossfade, SHM, and integration into other repositories remain
 outside round 1. The WAV sink splits files on rate changes because a WAV header
 has one sample rate; the core itself preserves a continuous frame boundary.
+
+## Optional host integration
+
+`Config::observeCommand(const Command&)` runs on the event-loop thread before
+processing every complete `strm` (including unknown letters). `letter` is the
+command, `value` is the unsigned decoded 32-bit field at opcode offset 18, and
+`playing` means running, not paused, with at least one frame submitted since the
+last full stop or streaming flush. This is the state before the command. The
+observer must return promptly and must not re-enter Player. With no observer,
+command processing is unchanged.
+
+`Config::startOnSubmit` optionally announces STMs at submission rather than
+at audibility. It defaults to false; elapsed always uses `audibleFrames()`.
+`Sink::drained(submitted)` defaults to `audibleFrames() >= submitted`. A remote
+output can instead report completion of its output queue without manufacturing
+audible frames, for devices whose positions have only whole-second resolution.
+These hooks have no device-specific logic; existing sinks retain their behaviour.

@@ -262,6 +262,38 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(body[34:36], b'EN')
         self.assertEqual(body[36:].decode().split(','), ['Model=yeney', 'ModelName=YeneY', 'AccuratePlayPoints=1', 'MaxSampleRate=48000', 'alc', 'flc', 'mp3', 'aif', 'pcm'])
 
+    def test_command_observer(self):
+        from unittest.mock import patch
+        with patch.dict(os.environ, {'YENEY_TEST_OBSERVER': '1'}), Session() as s:
+            body, _ = pcm(seconds=2)
+            s.lms.strm('s', s.source(body), gain=65536)
+            s.lms.wait('STMs')
+            s.lms.strm('p')
+            s.lms.wait('STMp')
+            s.lms.strm('u')
+            s.lms.wait('STMr')
+            s.lms.strm('a', value=17)
+            s.lms.timer(0xfedcba98)
+            batch = []
+            original = s.lms.send
+            s.lms.send = lambda op, body: batch.append(struct.pack('!H', 4 + len(body)) + op.encode() + body)
+            for cmd, value in [('f', 0), ('t', 123), ('q', 0), ('t', 456)]:
+                s.lms.strm(cmd, value=value)
+            s.lms.send = original
+            s.lms.connection.sendall(b''.join(batch))
+            while s.lms.wait('STMt')['stamp'] != 456:
+                pass
+            s.stop()
+            lines = s.base.with_suffix('.log').read_text().splitlines()
+            observed = [line for line in lines if line.startswith('observe ')]
+            self.assertEqual(observed, ['observe s 65536 0', 'observe p 0 1',
+                'observe u 0 0', 'observe a 17 1', 'observe t 4275878552 1',
+                'observe f 0 1', 'observe t 123 0', 'observe q 0 0', 'observe t 456 0'])
+            for command, event in [('s', 'STMf'), ('p', 'STMp'), ('u', 'STMr'),
+                                   ('f', 'STMf'), ('q', 'STMf'), ('t', 'STMt')]:
+                index = next(i for i, line in enumerate(lines) if line.startswith('observe ' + command + ' '))
+                self.assertTrue(lines[index + 1].startswith(event), lines[index:index+3])
+
     def test_01_helo_pcm_clock_pause_timer_gain_name(self):
         with Session() as s:
             self.check_hello(s.hello)

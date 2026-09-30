@@ -10,6 +10,11 @@
 #include <functional>
 #include <memory>
 namespace yeney {
+struct Command {
+    char letter;
+    uint32_t value; // Big-endian field decoded from opcode offset 18.
+    bool playing;   // Running, not paused, and frames submitted since stop/flush.
+};
 struct Config {
     std::string name = "YeneY", server;
     uint16_t port = 3483;
@@ -19,6 +24,12 @@ struct Config {
     size_t earlyMediaBytes = 256ull * 1024 * 1024;
     size_t streamBytes = 256 * 1024, outputFrames = 48000 * 8;
     std::function<void(const std::string &)> log;
+    // Event-loop callback, before processing every complete strm command.
+    // Must not block or call back into Player.
+    std::function<void(const Command &)> observeCommand;
+    // Network outputs can announce boundaries on submission while keeping
+    // elapsed tied exclusively to the sink's audible coordinate.
+    bool startOnSubmit = false;
 };
 class Player {
     struct Impl;
