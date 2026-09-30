@@ -1,7 +1,7 @@
 # yeney-core
 
 An independently written C++17 LMS player core for YeneY and, later, LampaStream.
-Advertises **flc,alc,mp3,aif,pcm**, in that order, and delivers signed 32-bit stereo frames to a
+Advertises **alc,flc,mp3,aif,pcm**, in that order, and delivers signed 32-bit stereo frames to a
 pluggable sink. No squeezelite implementation is included or linked.
 
 Build with a C++17 compiler, GNU Make, pthreads and system libFLAC (`libflac-dev`).
@@ -18,7 +18,9 @@ make test
 ```
 
 Without `-s`, UDP discovery uses port 3483. `-d 0` silences event logging;
-levels 1–5 print event lines. SIGINT/SIGTERM stop the player cleanly.
+levels 1–5 print event lines. `--max-rate <Hz>` sets the null/WAV sink maximum
+(default 48000; accepted range 44100..384000) and the HELO MaxSampleRate.
+Use `--max-rate 192000` for native 192 kHz playback. SIGINT/SIGTERM stop the player cleanly.
 WAV output is stereo 32-bit integer PCM; rate changes open `listen.wav.1.wav`,
 then successive numbered segments. The null and WAV sinks run at real time.
 

@@ -20,12 +20,13 @@ int main(int argc, char **argv) {
         yeney::Config cfg;
         std::string sinkName = "null";
         int level = 1;
+        uint32_t maxRate = 48000;
         bool haveName = false, haveMac = false;
         for (int i = 1; i < argc; ++i) {
             std::string arg = argv[i];
             if (arg == "--help") {
                 std::cout << "yeney-player -n <name> -m <mac> [-s <host>[:port]] [--sink null|wav:<path>] "
-                             "[-d <level>]\n";
+                             "[--max-rate <Hz>] [-d <level>]\n";
                 return 0;
             }
             if (i + 1 == argc)
@@ -59,7 +60,20 @@ int main(int argc, char **argv) {
                 }
             } else if (arg == "--sink")
                 sinkName = v;
-            else if (arg == "-d") {
+            else if (arg == "--max-rate") {
+                const char *message = "--max-rate must be an integer in 44100..384000 Hz";
+                if (v.empty() || v.find_first_not_of("0123456789") != std::string::npos)
+                    throw std::invalid_argument(message);
+                unsigned long rate;
+                try {
+                    rate = std::stoul(v);
+                } catch (const std::exception &) {
+                    throw std::invalid_argument(message);
+                }
+                if (rate < 44100 || rate > 384000)
+                    throw std::invalid_argument(message);
+                maxRate = rate;
+            } else if (arg == "-d") {
                 level = std::stoi(v);
                 if (level < 0 || level > 5)
                     throw std::invalid_argument("debug level 0..5");
@@ -70,9 +84,9 @@ int main(int argc, char **argv) {
             throw std::invalid_argument("-n <name> and -m <mac> are required");
         std::unique_ptr<yeney::Sink> sink;
         if (sinkName == "null")
-            sink = std::make_unique<yeney::NullSink>();
+            sink = std::make_unique<yeney::NullSink>(maxRate);
         else if (sinkName.rfind("wav:", 0) == 0 && !sinkName.substr(4).empty())
-            sink = std::make_unique<yeney::WavSink>(sinkName.substr(4));
+            sink = std::make_unique<yeney::WavSink>(sinkName.substr(4), maxRate);
         else
             throw std::invalid_argument("unknown sink");
         cfg.log = [level](const std::string &s) {

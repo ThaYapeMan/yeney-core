@@ -53,6 +53,7 @@ test: format-check all unit-test test-player decoder-test demux-sanitized
 	./unit-test
 	python3 tests/fake_lms.py
 	python3 tests/decoders_test.py
+	python3 tests/device_script_test.py
 
 clean:
 	rm -f $(CORE_OBJS) $(APP_OBJS) $(TEST_OBJS) $(CORE_OBJS:.o=.d) $(APP_OBJS:.o=.d) $(TEST_OBJS:.o=.d) libyeneycore.a yeney-player unit-test test-player decoder-test demux-sanitized

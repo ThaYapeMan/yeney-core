@@ -406,7 +406,7 @@ class DecoderTests(unittest.TestCase):
             cases.append(('m', file.read_bytes(), ref))
         for codec, data, expected in cases:
             with self.subTest(codec=codec), Session() as s:
-                self.assertTrue(s.hello['body'].endswith(b'flc,alc,mp3,aif,pcm'))
+                self.assertTrue(s.hello['body'].endswith(b'alc,flc,mp3,aif,pcm'))
                 s.lms.strm('s', s.source(data), fmt=codec)
                 s.lms.wait('STMu')
                 if expected is not None:

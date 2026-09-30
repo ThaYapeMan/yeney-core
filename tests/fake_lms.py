@@ -171,7 +171,7 @@ class LMS:
             self.connection.sendall(frame)
 
     def strm(self, command, http=None, rate=44100, bits=16, channels=2, big=False, autostart=1, value=0, fmt='p', threshold=0, out_threshold=0, unknown=False):
-        rates = {44100: '3', 48000: '4', 8000: '5'}
+        rates = {44100: '3', 48000: '4', 8000: '5', 192000: '<'}
         params = b'????' if unknown else (str(bits // 8 - 1) + rates[rate] + str(channels) + ('0' if big else '1')).encode()
         body = command.encode() + str(autostart).encode() + fmt.encode() + params + bytes([threshold, 0, 0, ord('0'), 0, out_threshold, 0])
         body += struct.pack('!IHI', value, http.port if http else 0, 0)
@@ -192,7 +192,7 @@ class LMS:
 
 
 class Session:
-    def __init__(self, app=False, discover=False, sock=None, mode="normal", host="127.0.0.1"):
+    def __init__(self, app=False, discover=False, sock=None, mode="normal", host="127.0.0.1", max_rate=None, sink="wav"):
         self.temp = tempfile.TemporaryDirectory(prefix='yeney-test-')
         self.base = Path(self.temp.name) / 'record'
         self.lms = LMS(sock)
@@ -200,7 +200,9 @@ class Session:
         port = self.lms.listener.getsockname()[1]
         args = [str(ROOT / 'test-player'), 'discover' if discover else host, str(port), str(self.base), mode]
         if app:
-            args = [str(ROOT / 'yeney-player'), '-n', 'Fixture', '-m', '02:01:02:03:04:05', '-s', host + ':' + str(port), '--sink', 'wav:' + str(self.base) + '.wav']
+            args = [str(ROOT / 'yeney-player'), '-n', 'Fixture', '-m', '02:01:02:03:04:05', '-s', host + ':' + str(port), '--sink', 'wav:' + str(self.base) + '.wav' if sink == 'wav' else 'null']
+            if max_rate is not None:
+                args += ['--max-rate', str(max_rate)]
         self.proc = subprocess.Popen(args, stdout=self.log, stderr=self.log)
         self.hello = self.lms.accept()
         self.http = []
@@ -257,7 +259,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(body[16] >> 6, 2)
         self.assertEqual(struct.unpack('!H', body[24:26])[0], 0x4000 if reconnect else 0)
         self.assertEqual(body[34:36], b'EN')
-        self.assertEqual(body[36:].decode().split(','), ['Model=yeney', 'ModelName=YeneY', 'AccuratePlayPoints=1', 'MaxSampleRate=48000', 'flc', 'alc', 'mp3', 'aif', 'pcm'])
+        self.assertEqual(body[36:].decode().split(','), ['Model=yeney', 'ModelName=YeneY', 'AccuratePlayPoints=1', 'MaxSampleRate=48000', 'alc', 'flc', 'mp3', 'aif', 'pcm'])
 
     def test_01_helo_pcm_clock_pause_timer_gain_name(self):
         with Session() as s:
@@ -592,6 +594,30 @@ class ProtocolTests(unittest.TestCase):
             s.lms.send('cont', struct.pack('!IB', 16000, 0))
             s.lms.wait('STMn')
             self.assertFalse(any(p.get('event') == 'STMs' for p in s.lms.packets))
+
+    def test_21_app_max_rate(self):
+        for sink in ['null', 'wav']:
+            with self.subTest(sink=sink), Session(app=True, max_rate=192000, sink=sink) as s:
+                self.assertIn('MaxSampleRate=192000', s.hello['body'][36:].decode().split(','))
+                body, expected = pcm(192000, 24, .15)
+                s.lms.strm('s', s.source(body), rate=192000, bits=24)
+                s.lms.wait('STMu')
+                s.stop()
+                self.assertFalse(any(p.get('event') == 'STMn' for p in s.lms.packets))
+                if sink == 'wav':
+                    wav = s.base.with_suffix('.wav').read_bytes()
+                    self.assertEqual(struct.unpack('<I', wav[24:28])[0], 192000)
+                    self.assertEqual(wav[44:], expected)
+        with Session(app=True) as s:
+            self.check_hello(s.hello)
+        for value in ['0', '44099', '384001', '-1', '192000Hz', 'abc', '999999999999999999999']:
+            result = subprocess.run([str(ROOT / 'yeney-player'), '--max-rate', value],
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('--max-rate must be an integer in 44100..384000 Hz', result.stderr)
+        for value in ['44100', '384000']:
+            with Session(app=True, max_rate=value) as s:
+                self.assertIn('MaxSampleRate=' + value, s.hello['body'][36:].decode().split(','))
 
 
 if __name__ == '__main__':

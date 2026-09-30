@@ -12,7 +12,7 @@ player's event log and a capture of the Slimproto traffic (TCP 3483):
   play    the track starts and LMS position advances at real-time speed
   format  what LMS actually sent (strm format code: f=FLAC, l=ALAC, m=MP3,
           p=PCM/AIFF) matches the expectation for this file, and the audio
-          arrives at <= 48 kHz
+          arrives at <= the phase maximum (48 kHz, then 192 kHz native ALAC)
   seek    a jump to the middle lands there and keeps advancing
   pause   position freezes while paused
   resume  position advances again after resume
@@ -50,7 +50,9 @@ TRACKS = [
     ("FLAC", "44436", "flc"),          # Just A Little Bit More (Extended)
     ("ALAC hi-res", "47797", "alc"),   # Sharp Dressed Man - ZZ Top - Eliminator
 ]
-EXPECTED_CAPS = ["flc", "alc", "mp3", "aif", "pcm"]
+NATIVE_TRACK = ("ALAC 192k native", "47797", "alc")
+NATIVE_MAX_RATE = 192000
+EXPECTED_CAPS = ["alc", "flc", "mp3", "aif", "pcm"]
 MAX_RATE = 48000
 
 PLAYER_NAME = "Core test"
@@ -164,15 +166,16 @@ def lms_host_from_config():
 class PlayerProcess:
     """Runs yeney-player and keeps its event lines with timestamps."""
 
-    def __init__(self, lms, logpath):
+    def __init__(self, lms, logpath, max_rate=MAX_RATE, append=False):
         self.lines = []
         self.lock = threading.Lock()
-        self.log = open(logpath, "w")
+        self.log = open(logpath, "a" if append else "w")
         self.proc = subprocess.Popen(
             ["./yeney-player", "-n", PLAYER_NAME, "-m", PLAYER_MAC, "-s", lms,
-             "--sink", "null", "-d", "1"],
+             "--sink", "null", "--max-rate", str(max_rate), "-d", "1"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-        threading.Thread(target=self._read, daemon=True).start()
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.reader.start()
 
     def _read(self):
         for line in self.proc.stdout:
@@ -194,6 +197,8 @@ class PlayerProcess:
                 self.proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+                self.proc.wait()
+        self.reader.join()
         self.log.close()
 
 
@@ -358,7 +363,8 @@ class Run:
     def __init__(self, cli, player, outdir):
         self.cli, self.player, self.outdir = cli, player, outdir
         self.results = []   # (track, check, ok, detail)
-        self.phases = []    # (label, start, end, songinfo)
+        self.phases = []    # (label, start, end, songinfo, max_rate, native_192k)
+        self.native_start = None
         self.report = open(os.path.join(outdir, "report.txt"), "w")
         self.status_log = open(os.path.join(outdir, "lms-status.log"), "w")
 
@@ -404,8 +410,8 @@ class Run:
             time.sleep(1)
         return False
 
-    def track(self, label, track_id, ctype):
-        self.say(f"=== {label} (id {track_id})")
+    def track(self, label, track_id, ctype, max_rate=MAX_RATE, native_192k=False):
+        self.say(f"=== {label} (id {track_id}); max_rate={max_rate} Hz")
         info = Cli.fields(self.cli.raw(f"songinfo 0 100 track_id:{track_id} tags:aloTd"))
         if not info.get("title"):
             self.check(label, "found", False, f"LMS has no track with id {track_id}")
@@ -421,7 +427,7 @@ class Run:
         self.cli.player(f"playlistcontrol cmd:load track_id:{track_id}")
         if not self.wait_playing():
             self.check(label, "play", False, "LMS never reached play with advancing time")
-            self.finish_phase(label, t_start, info)
+            self.finish_phase(label, t_start, info, max_rate, native_192k)
             return
         adv, wall, t0, t1 = self.measure(PLAY_SECS)
         ratio = adv / wall if wall else 0
@@ -450,20 +456,26 @@ class Run:
         mode, _, _ = self.status()
         self.check(label, "resume", mode == "play" and adv >= 3.5 and t0 >= p1 - 0.5,
                    f"from {p1:.1f}s: {t0:.1f}s -> {t1:.1f}s (+{adv:.1f}s in {wall:.1f}s)")
-        self.finish_phase(label, t_start, info)
+        self.finish_phase(label, t_start, info, max_rate, native_192k)
 
-    def finish_phase(self, label, t_start, info):
+    def finish_phase(self, label, t_start, info, max_rate=MAX_RATE, native_192k=False):
         t_end = time.time()
-        self.phases.append((label, t_start, t_end, info))
+        self.phases.append((label, t_start, t_end, info, max_rate, native_192k))
         lines = self.player.since(t_start, t_end)
         bad = [l for l in lines if re.search(r"\bSTMn\b|error|unsupported", l, re.I)]
         rates = sorted({m.group(1) for l in lines for m in [re.search(r"rate=(\d+)", l)] if m})
         self.check(label, "clean", not bad,
                    ("no STMn/error lines" if not bad else f"{len(bad)} line(s), first: {bad[0]}")
                    + (f"; stream rate(s) {', '.join(rates)} Hz" if rates else ""))
-        high = [r for r in rates if int(r) > MAX_RATE]
-        if high:
-            self.check(label, "rate", False, f"audio arrived above {MAX_RATE} Hz: {', '.join(high)}")
+        high = [r for r in rates if int(r) > max_rate]
+        if native_192k:
+            expected = int(info.get("samplerate") or 0)
+            self.check(label, "rate", expected == NATIVE_MAX_RATE and bool(rates)
+                       and all(int(r) == expected for r in rates),
+                       f"audio rate(s) {', '.join(rates) or 'missing'} Hz; songinfo={expected} Hz; "
+                       f"phase maximum={max_rate} Hz")
+        elif high:
+            self.check(label, "rate", False, f"audio arrived above {max_rate} Hz: {', '.join(high)}")
 
     def analyse_capture(self, pcap, lms):
         try:
@@ -482,7 +494,15 @@ class Run:
                        f"advertised {','.join(formats)} (expected {','.join(EXPECTED_CAPS)})")
         else:
             self.check("setup", "caps", False, "no HELO in the capture")
-        for label, t0, t1, info in self.phases:
+        if self.native_start is not None:
+            native_helos = [m for m in helos if m[0] >= self.native_start]
+            caps = native_helos[0][3][36:].decode("latin-1", "replace").split(",") if native_helos else []
+            formats = [c for c in caps if "=" not in c]
+            self.check("native setup", "caps", formats == EXPECTED_CAPS
+                       and f"MaxSampleRate={NATIVE_MAX_RATE}" in caps,
+                       f"second-phase HELO: {','.join(caps) or 'missing'}; "
+                       f"expected MaxSampleRate={NATIVE_MAX_RATE}, {','.join(EXPECTED_CAPS)}")
+        for label, t0, t1, info, max_rate, native_192k in self.phases:
             starts = [m for m in messages if m[2] == "strm" and m[1] == "S>P"
                       and len(m[3]) >= 24 and chr(m[3][0]) == "s" and t0 <= m[0] <= t1]
             if not starts:
@@ -492,9 +512,12 @@ class Run:
             rate = int(info.get("samplerate") or 0)
             ctype = info.get("type")
             native = {"flc": "f", "alc": "l", "mp3": "m", "aif": "p", "wav": "p"}.get(ctype)
-            if rate > MAX_RATE:
+            if native_192k:
+                ok = all(c == "l" for c in codes)
+                expect = "l (native ALAC at 192000 Hz)"
+            elif rate > max_rate:
                 ok = all(c in "fp" for c in codes)
-                expect = f"f or p (LMS converts {rate} Hz to <= {MAX_RATE} Hz)"
+                expect = f"f or p (LMS converts {rate} Hz to <= {max_rate} Hz)"
             else:
                 ok = native is not None and all(c == native for c in codes)
                 expect = f"{native} (native {ctype})"
@@ -527,7 +550,8 @@ def main():
     build = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     with open(os.path.join(outdir, "run-info.txt"), "w") as f:
         f.write(f"yeney-core={build or '?'}\nlms={lms}\nplayer={PLAYER_NAME} {PLAYER_MAC}\n"
-                f"tracks={' '.join(t[1] for t in TRACKS)}\nstarted={time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f"tracks={' '.join(t[1] for t in TRACKS + [NATIVE_TRACK])}\n"
+                f"initial_max_rate={MAX_RATE}\nnative_max_rate={NATIVE_MAX_RATE}\nstarted={time.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     pcap = os.path.join(outdir, "slimproto.pcap")
     capture = None if args.no_capture else Capture(lms, pcap)
@@ -549,6 +573,21 @@ def main():
         run.check("setup", "connect", True, "player registered with LMS")
         for spec in TRACKS:
             run.track(*spec)
+        cli.player("stop")
+        player.stop()
+        run.native_start = time.time()
+        player = PlayerProcess(lms, os.path.join(outdir, "player.log"), NATIVE_MAX_RATE, append=True)
+        run.player = player
+        run.say(f"restarted {PLAYER_NAME} ({PLAYER_MAC}); max_rate={NATIVE_MAX_RATE} Hz")
+        for _ in range(20):
+            if any("HELO" in line for line in player.since(run.native_start)):
+                break
+            time.sleep(0.5)
+        else:
+            run.check("native setup", "connect", False, "restarted player sent no HELO within 10 s")
+            raise KeyboardInterrupt
+        run.check("native setup", "connect", True, "restarted player sent HELO")
+        run.track(*NATIVE_TRACK, max_rate=NATIVE_MAX_RATE, native_192k=True)
     except KeyboardInterrupt:
         run.say("stopped early")
     finally:

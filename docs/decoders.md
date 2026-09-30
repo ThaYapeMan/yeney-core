@@ -1,9 +1,38 @@
 # Decoder contract and evidence
 
-Round 2 advertises `flc,alc,mp3,aif,pcm`, in that exact order after
+Round 2 advertises `alc,flc,mp3,aif,pcm`, in that exact order after
 `MaxSampleRate=<sink maximum>`. Our demuxer, adapters, trimming, queues, and tests
 are original code. No squeezelite implementation is incorporated. Library source
 and licence details are in `THIRD_PARTY_NOTICES.md`.
+
+## Capability order and test-player maximum
+
+ALAC comes first because LMS tries conversion targets in advertised order unless
+`prioritizeNative` is enabled. At pinned slimserver commit
+`f0a77cdce73ef1d1cc53019967d845dfcd0f8fb1`,
+`Slim/Player/TranscodingHelper.pm:355–366` obtains the supported order and
+optionally moves native first; `:368–389` builds and tries profiles in that order.
+`convert.conf:350–353` provides alc->flc, so putting FLAC first can bypass our
+native ALAC decoder; `:377–378` provides native alc->alc.
+
+The same pinned `convert.conf:1–414` contains no active flc->alc, mp3->alc, mp3->flc,
+or aac->alc rule. Native FLAC (`:295–296`) and MP3 (`:169–170`) therefore stay
+native. AAC still selects the lossless FLAC target (`:342–344`). MP3 follows
+ALAC and FLAC because alc->mp3 (`:117–120`) and flc->mp3 (`:137–140`) exist
+and must not take precedence over lossless/native playback. The mp3->flc
+example at `:292–293` is commented out. Pinned sources:
+[TranscodingHelper.pm](https://github.com/LMS-Community/slimserver/blob/f0a77cdce73ef1d1cc53019967d845dfcd0f8fb1/Slim/Player/TranscodingHelper.pm#L355-L389),
+[convert.conf](https://github.com/LMS-Community/slimserver/blob/f0a77cdce73ef1d1cc53019967d845dfcd0f8fb1/convert.conf#L1-L414).
+
+`yeney-player --max-rate <Hz>` sets NullSink/WavSink maxSampleRate and HELO's
+MaxSampleRate, default 48000, accepting integer Hz from 44100 through 384000.
+It does not change core limits. The device test keeps its four 48 kHz tracks,
+then restarts the same player identity with `--max-rate 192000` for
+"ALAC 192k native". That phase requires wire `l`, exact songinfo rate 192000,
+a second-phase HELO with the same format list and MaxSampleRate=192000, and
+all existing playback, seek, pause, resume, and clean checks. Logs and the
+original capture/tarball cover both phases. Localhost tests verify both sink
+choices at 192 kHz (WAV samples bit-exact) and the default/argument bounds.
 
 ## Per-track pipeline
 

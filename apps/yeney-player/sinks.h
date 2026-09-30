@@ -12,8 +12,11 @@ namespace yeney {
 class NullSink : public Sink {
 protected:
     uint64_t frames_ = 0;
+    uint32_t maxRate_;
 
 public:
+    explicit NullSink(uint32_t maxRate = 48000) : maxRate_(maxRate) {}
+    uint32_t maxSampleRate() const override { return maxRate_; }
     void trackBoundary(uint64_t, const Format &, bool) override {}
     size_t write(const Frame *, size_t n) override {
         frames_ += n;
@@ -37,7 +40,8 @@ class WavSink : public NullSink {
     void finish();
 
 public:
-    explicit WavSink(std::string path) : path_(std::move(path)) {}
+    explicit WavSink(std::string path, uint32_t maxRate = 48000)
+        : NullSink(maxRate), path_(std::move(path)) {}
     ~WavSink() override;
     void close() { finish(); }
     void trackBoundary(uint64_t, const Format &, bool) override;

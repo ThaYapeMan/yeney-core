@@ -43,7 +43,7 @@ Bytes hello(const std::array<uint8_t, 6> &mac, bool reconnect, uint64_t received
     b.push_back('N');
     std::string caps =
         "Model=yeney,ModelName=YeneY,AccuratePlayPoints=1,MaxSampleRate=" + std::to_string(maxRate) +
-        ",flc,alc,mp3,aif,pcm";
+        ",alc,flc,mp3,aif,pcm";
     b.insert(b.end(), caps.begin(), caps.end());
     return packet("HELO", b);
 }
