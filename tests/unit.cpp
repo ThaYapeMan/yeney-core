@@ -6,6 +6,7 @@
 
 #include "core/protocol.h"
 #include "core/ring.h"
+#include "core/transitions.h"
 #include <cassert>
 #include <cstring>
 #include <deque>
@@ -116,5 +117,12 @@ int main() {
         rejected = true;
     }
     assert(rejected);
+    auto loud = crossFrame({INT32_MAX, INT32_MIN}, {INT32_MAX, INT32_MIN}, 131072, 131072, 1, 2);
+    assert(loud.left == INT32_MAX && loud.right == INT32_MIN);
+    auto tiny = processFrame({-1, 1}, 32768);
+    assert(tiny.left == -1 && tiny.right == 0);
+    assert(rampGain(0, 4, true) == 0 && rampGain(1, 4, true) == 16384);
+    assert(rampGain(3, 4, false) == 16384 && rampGain(4, 4, true) == 65536);
+    std::cout << "PASS DSP: signed fixed-point floor, saturating mix, linear envelope endpoints\n";
     std::cout << "PASS PCM: 8/16/24/32 bits, both byte orders, mono/stereo, signed extremes, maximum rate\n";
 }

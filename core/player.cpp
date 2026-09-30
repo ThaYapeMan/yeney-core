@@ -7,6 +7,7 @@
 #include "player.h"
 #include "decoder.h"
 #include "ring.h"
+#include "transitions.h"
 #include <algorithm>
 #include <arpa/inet.h>
 #include <array>
@@ -112,8 +113,18 @@ struct Player::Impl {
         int autostart = 1;
         bool known = false, headerPcm = false, wave = false, ready = false, eof = false, decoded = false,
              boundary = false, gapless = false;
-        uint64_t first = 0, end = 0, skipped = 0;
+        uint64_t first = 0, end = 0, skipped = 0, played = 0, produced = 0;
+        uint32_t replayGain = 0;
+        unsigned transition = 0, period = 0;
+        uint64_t window = 0, outStart = 0, outLength = 0;
+        bool crossChecked = false;
     };
+    struct Overlap {
+        std::shared_ptr<Track> old, next;
+        uint64_t length = 0, position = 0;
+    } overlap;
+    size_t reservedWindow = 0;
+    size_t outputCapacity() const { return cfg.outputFrames + reservedWindow * 2; }
     std::deque<std::shared_ptr<Track>> output, boundaries;
     std::shared_ptr<Track> fetching, audible;
     size_t queued = 0;
@@ -128,7 +139,8 @@ struct Player::Impl {
     double credit = 0;
     explicit Impl(Config c, Sink &s) : cfg(std::move(c)), sink(s), input(cfg.streamBytes) {
         if (cfg.streamBytes < 8 || cfg.outputFrames < 256 || cfg.streamBytes > UINT32_MAX ||
-            cfg.outputFrames > UINT32_MAX / 8)
+            cfg.outputFrames > UINT32_MAX / 8 - Decoder::outputCapacity ||
+            cfg.transitionMaxFrames > (UINT32_MAX / 8 - cfg.outputFrames - Decoder::outputCapacity) / 2)
             throw std::invalid_argument("buffer size outside supported range");
         submitted = sink.audibleFrames();
     }
@@ -156,7 +168,7 @@ struct Player::Impl {
             s.streamFull += fetching->decoder->inputBuffered();
         s.received = received;
         s.jiffies = jiffies();
-        s.outputSize = (cfg.outputFrames + Decoder::outputCapacity) * sizeof(Frame);
+        s.outputSize = (outputCapacity() + Decoder::outputCapacity) * sizeof(Frame);
         s.outputFull = queued * sizeof(Frame);
         if (fetching && fetching->decoder)
             s.outputFull += fetching->decoder->outputBuffered() * sizeof(Frame);
@@ -175,6 +187,8 @@ struct Player::Impl {
         stopStream();
         fetching.reset();
         output.clear();
+        overlap = {};
+        reservedWindow = 0;
         boundaries.clear();
         queued = 0;
         skip = 0;
@@ -191,8 +205,17 @@ struct Player::Impl {
         wake = 0;
         ended = true;
     }
+    void cancelOverlap() {
+        if (!overlap.old)
+            return;
+        auto old = overlap.old;
+        queued -= old->output.size();
+        output.erase(std::remove(output.begin(), output.end(), old), output.end());
+        overlap = {};
+    }
     void flushStreaming() {
         stopStream();
+        cancelOverlap();
         std::shared_ptr<Track> retained;
         for (auto it = output.begin(); it != output.end();) {
             auto t = *it;
@@ -419,6 +442,7 @@ struct Player::Impl {
                 stat("STMr");
                 break;
             case 'a':
+                cancelOverlap();
                 skip += uint64_t(value) * (audible ? audible->format.rate : 48000) / 1000;
                 break;
             case 's':
@@ -483,12 +507,19 @@ struct Player::Impl {
         t.autostart = b[5] - '0';
         t.threshold = std::min(size_t(b[11]) * 1024, input.capacity());
         t.outputThreshold = b[16];
+        t.replayGain = be32(b.data() + 18);
+        t.transition = b[14] - '0';
+        t.period = b[13];
         ended = false;
         underrun = false;
         output.push_back(fetching);
         // STMc must precede even decoder failure: LMS ignores status before it.
         stat("STMc");
         try {
+            if (t.transition > 4)
+                throw std::invalid_argument("unsupported transition type");
+            log("track gain=" + std::to_string(t.replayGain) + " transition=" + std::to_string(t.transition) +
+                " period=" + std::to_string(t.period));
             if (t.autostart < 0 || t.autostart > 3)
                 throw std::invalid_argument("autostart");
             if (b[6] != '?')
@@ -632,8 +663,16 @@ struct Player::Impl {
                 throw std::runtime_error(error);
             if (!t.decoder->format(t.format))
                 return;
+            if (t.transition && t.period) {
+                uint64_t frames = uint64_t(t.format.rate) * t.period;
+                if (t.transition == 4)
+                    frames /= 2;
+                t.window = std::min<uint64_t>(frames, cfg.transitionMaxFrames);
+                reservedWindow = std::max(reservedWindow, size_t(t.window));
+            }
             Frame frames[1024];
-            size_t count = t.decoder->take(frames, std::min(size_t(1024), cfg.outputFrames - queued));
+            size_t count = t.decoder->take(frames, std::min(size_t(1024), outputCapacity() - queued));
+            t.produced += count;
             t.output.insert(t.output.end(), frames, frames + count);
             queued += count;
             size_t target = std::min(cfg.outputFrames, size_t(t.outputThreshold) * t.format.rate / 10);
@@ -652,6 +691,10 @@ struct Player::Impl {
             }
             if (complete) {
                 t.decoded = true;
+                if (t.transition == 3 || t.transition == 4) {
+                    t.outLength = std::min<uint64_t>(t.window, t.output.size());
+                    t.outStart = t.played + t.output.size() - t.outLength;
+                }
                 stat("STMd");
             }
         } catch (const std::exception &e) {
@@ -665,6 +708,61 @@ struct Player::Impl {
             boundaries.pop_front();
             stat("STMs");
         }
+    }
+    void boundary(const std::shared_ptr<Track> &t) {
+        if (t->boundary)
+            return;
+        t->first = submitted;
+        t->boundary = true;
+        sink.trackBoundary(submitted, t->format, t->gapless);
+        boundaries.push_back(t);
+        log("boundary frame=" + std::to_string(submitted) + " rate=" + std::to_string(t->format.rate) +
+            " gapless=" + std::to_string(t->gapless));
+    }
+    uint32_t envelope(const Track &t, uint64_t frame) const {
+        if (t.outLength && frame >= t.outStart)
+            return rampGain(frame - t.outStart, t.outLength, false);
+        if (t.transition == 2 || t.transition == 4) {
+            auto length = t.decoded ? std::min(t.window, t.produced) : t.window;
+            return rampGain(frame, length, true);
+        }
+        return 65536;
+    }
+    uint64_t crossWindow(const Track &t) const {
+        return t.decoded ? std::min<uint64_t>(t.window, t.output.size()) : t.window;
+    }
+    bool prepareOverlap(const std::shared_ptr<Track> &old) {
+        if (overlap.old || output.size() < 2 || !old->decoded)
+            return true;
+        auto next = output[1];
+        if (!next->ready || !next->decoder || !next->decoder->format(next->format))
+            return true;
+        if (next->crossChecked)
+            return true;
+        if (next->transition != 1 || !next->window || old->format.rate != next->format.rate) {
+            next->crossChecked = true;
+            if (next->transition == 1 && old->format.rate != next->format.rate)
+                log("crossfade disabled: sample rates differ");
+            return true;
+        }
+        uint64_t window = crossWindow(*next);
+        uint64_t length = std::min<uint64_t>(window, old->output.size());
+        if (old->output.size() > window)
+            return true;
+        if (next->output.size() < length && !next->decoded) {
+            next->crossChecked = true;
+            log("crossfade disabled: insufficient incoming PCM");
+            return true;
+        }
+        length = std::min<uint64_t>(length, next->output.size());
+        next->crossChecked = true;
+        if (length) {
+            overlap = {old, next, length, 0};
+            boundary(next);
+            log("crossfade start frame=" + std::to_string(submitted) + " length=" + std::to_string(length) +
+                " rate=" + std::to_string(next->format.rate));
+        }
+        return true;
     }
     void outputStep(uint32_t now) {
         uint32_t delta = now - lastTick;
@@ -703,29 +801,54 @@ struct Player::Impl {
                 queued -= n;
                 skip -= n;
                 t->skipped += n;
+                t->played += n;
                 continue;
             }
             if (sink.paced())
                 count = std::min(count, size_t(std::max(0.0, std::floor(credit * t->format.rate))));
             if (!count)
                 break;
-            if (!t->boundary) {
-                t->first = submitted;
-                t->boundary = true;
-                sink.trackBoundary(submitted, t->format, t->gapless);
-                boundaries.push_back(t);
-                log("boundary frame=" + std::to_string(submitted) +
-                    " rate=" + std::to_string(t->format.rate) + " gapless=" + std::to_string(t->gapless));
+            if (!t->decoded && (t->transition == 1 || t->transition == 3 || t->transition == 4)) {
+                if (t->output.size() <= t->window)
+                    break;
+                count = std::min<uint64_t>(count, t->output.size() - t->window);
             }
+            if (!t->played && !t->decoded && (t->transition == 2 || t->transition == 4) &&
+                t->output.size() < t->window)
+                break;
+            boundary(t);
+            if (!prepareOverlap(t))
+                break;
+            if (overlap.old)
+                count = std::min<uint64_t>(count, overlap.length - overlap.position);
+            else if (output.size() > 1 && t->decoded && output[1]->transition == 1 &&
+                     t->output.size() > crossWindow(*output[1]))
+                count = std::min<uint64_t>(count, t->output.size() - crossWindow(*output[1]));
             Frame frames[256];
-            for (size_t i = 0; i < count; ++i)
-                frames[i] = t->output[i];
+            for (size_t i = 0; i < count; ++i) {
+                frames[i] = overlap.old
+                                ? crossFrame(t->output[i], overlap.next->output[i], t->replayGain,
+                                             overlap.next->replayGain, overlap.position + i, overlap.length)
+                                : processFrame(t->output[i], t->replayGain, envelope(*t, t->played + i));
+            }
             size_t accepted = sink.write(frames, count);
             if (accepted > count)
                 throw std::runtime_error("sink accepted more frames than offered");
             for (size_t i = 0; i < accepted; ++i)
                 t->output.pop_front();
             queued -= accepted;
+            t->played += accepted;
+            if (overlap.old) {
+                for (size_t i = 0; i < accepted; ++i)
+                    overlap.next->output.pop_front();
+                overlap.next->played += accepted;
+                queued -= accepted;
+                overlap.position += accepted;
+                if (overlap.position == overlap.length) {
+                    log("crossfade complete frame=" + std::to_string(submitted + accepted));
+                    overlap = {};
+                }
+            }
             submitted += accepted;
             if (sink.paced())
                 credit -= double(accepted) / t->format.rate;

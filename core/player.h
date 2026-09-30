@@ -15,6 +15,7 @@ struct Config {
     uint16_t port = 3483;
     std::string discoveryAddress = "255.255.255.255";
     std::array<uint8_t, 6> mac{0x02, 0, 0, 0, 0, 1};
+    size_t transitionMaxFrames = 2 * 1024 * 1024; // per-track window cap
     size_t earlyMediaBytes = 256ull * 1024 * 1024;
     size_t streamBytes = 256 * 1024, outputFrames = 48000 * 8;
     std::function<void(const std::string &)> log;

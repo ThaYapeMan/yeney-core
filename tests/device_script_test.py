@@ -90,6 +90,70 @@ class DeviceScriptTests(unittest.TestCase):
             self.assertEqual(dump.count('offset=32848'), 11)
             self.assertIn('45 53 55 48 01 00', dump)
 
+    def test_preferences_restore_all_after_set_or_restore_failure(self):
+        cli = Mock()
+        current = {'transitionType': '2', 'transitionDuration': '9'}
+        def command(text):
+            _, name, value = text.split()
+            if value == '?': return f'mac playerpref {name} {current[name]}'
+            current[name] = value
+            return f'mac playerpref {name} {value}'
+        cli.player.side_effect = command
+        guard = device.PreferenceGuard(cli, self.run)
+        guard.set('transitionType', 1)
+        guard.set('transitionDuration', 5)
+        guard.set('transitionType', 0)
+        guard.restore()
+        self.assertEqual(current, {'transitionType': '2', 'transitionDuration': '9'})
+        # Saved original survives a failure during mutation; restore is still attempted.
+        def fail_set(text):
+            if text.endswith(' 5'): raise OSError('injected set failure')
+            return command(text)
+        cli.player.side_effect = fail_set
+        guard = device.PreferenceGuard(cli, self.run)
+        with self.assertRaises(OSError): guard.set('transitionDuration', 5)
+        guard.restore()
+        self.assertEqual(current['transitionDuration'], '9')
+        guard.saved['transitionType'] = '2'
+        def fail_restore(text):
+            if 'transitionType' in text: raise OSError('injected restore failure')
+            return command(text)
+        cli.player.side_effect = fail_restore
+        self.run.results.clear()
+        guard.restore()
+        self.assertFalse(self.result('prefs', 'restore'))
+        self.assertIn('playerpref transitionDuration 9', [c.args[0] for c in cli.player.call_args_list])
+
+    def test_transition_wav_analysis_and_negative_checks(self):
+        rate = 8000
+        def wav(name, value):
+            path = Path(self.temp.name) / name
+            raw = struct.pack('<ii', value, -value) * rate * 9
+            header = b'RIFF' + struct.pack('<I', 36 + len(raw)) + b'WAVEfmt ' + struct.pack('<IHHIIHH', 16, 1, 2, rate, rate * 8, 8, 32) + b'data' + struct.pack('<I', len(raw))
+            path.write_bytes(header + raw)
+            return str(path)
+        self.run.rg_phases = [('on', 1, 3, wav('on.wav', 100000000 * 26112 // 65536)),
+                              ('off', 4, 6, wav('off.wav', 100000000))]
+        self.run.cross_phase = (10, 12, wav('cross.wav', 100000000))
+        self.player.since.return_value = ['boundary frame=8000 rate=8000',
+            'crossfade start frame=8000 length=40000 rate=8000', 'crossfade complete frame=48000']
+        def packet(t, gain, cross=False):
+            body = bytearray(24); body[0] = ord('s'); body[9] = 5; body[10] = ord('1') if cross else ord('0')
+            struct.pack_into('>I', body, 14, gain)
+            return (t, 'S>P', 'strm', bytes(body))
+        messages = [packet(2, 26112), packet(5, 0), packet(11, 0, True)]
+        self.run.analyse_transitions(messages)
+        self.assertTrue(self.result('ReplayGain', 'level'))
+        self.assertTrue(self.result('Crossfade', 'window'))
+        self.assertTrue(self.result('Crossfade', 'wav'))
+        self.run.results.clear()
+        self.run.rg_phases[0] = ('on', 1, 3, wav('bad.wav', 100000000))
+        self.run.analyse_transitions(messages)
+        self.assertFalse(self.result('ReplayGain', 'level'))
+        self.run.results.clear()
+        self.run.analyse_transitions([])
+        self.assertFalse(self.result('Transitions', 'analysis'))
+
     def test_restart_preserves_identity_and_appends_log(self):
         path = Path(self.temp.name) / 'player.log'
         for rate, append in [(48000, False), (192000, True)]:

@@ -10,7 +10,7 @@ LDLIBS += -pthread -lFLAC
 
 ALAC_C = EndianPortable ALACBitUtilities ag_dec dp_dec matrix_dec
 ALAC_OBJS = $(addprefix build/alac/,$(addsuffix .o,$(ALAC_C))) build/alac/ALACDecoder.o
-CORE_OBJS = core/protocol.o core/player.o core/decoder.o core/mp4.o $(ALAC_OBJS)
+CORE_OBJS = core/transitions.o core/protocol.o core/player.o core/decoder.o core/mp4.o $(ALAC_OBJS)
 APP_OBJS = apps/yeney-player/main.o apps/yeney-player/sinks.o sinks/shm_v1/sink.o
 TEST_OBJS = tests/shm_unit.o tests/unit.o tests/fixture.o tests/decoder_fixture.o
 
@@ -59,6 +59,7 @@ test: format-check shm-unit all unit-test test-player decoder-test demux-sanitiz
 	python3 tests/decoders_test.py
 	python3 tests/device_script_test.py
 	python3 tests/shm_test.py
+	python3 tests/transitions_test.py
 
 clean:
 	rm -f $(CORE_OBJS) $(APP_OBJS) $(TEST_OBJS) $(CORE_OBJS:.o=.d) $(APP_OBJS:.o=.d) $(TEST_OBJS:.o=.d) libyeneycore.a yeney-player unit-test test-player decoder-test demux-sanitized shm-unit

@@ -170,11 +170,11 @@ class LMS:
         else:
             self.connection.sendall(frame)
 
-    def strm(self, command, http=None, rate=44100, bits=16, channels=2, big=False, autostart=1, value=0, fmt='p', threshold=0, out_threshold=0, unknown=False):
+    def strm(self, command, http=None, rate=44100, bits=16, channels=2, big=False, autostart=1, value=0, fmt='p', threshold=0, out_threshold=0, unknown=False, gain=0, transition=0, period=0):
         rates = {44100: '3', 48000: '4', 8000: '5', 192000: '<'}
         params = b'????' if unknown else (str(bits // 8 - 1) + rates[rate] + str(channels) + ('0' if big else '1')).encode()
-        body = command.encode() + str(autostart).encode() + fmt.encode() + params + bytes([threshold, 0, 0, ord('0'), 0, out_threshold, 0])
-        body += struct.pack('!IHI', value, http.port if http else 0, 0)
+        body = command.encode() + str(autostart).encode() + fmt.encode() + params + bytes([threshold, 0, period, ord('0') + transition, 0, out_threshold, 0])
+        body += struct.pack('!IHI', gain if command == 's' else value, http.port if http else 0, 0)
         assert len(body) == 24
         self.send('strm', body + (REQUEST if http else b''))
 

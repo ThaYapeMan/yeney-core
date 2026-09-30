@@ -27,11 +27,14 @@ formats. Run as root on the bridge host from the yeney-core checkout after
 Everything is written to /tmp/core-test-<timestamp>/ and packed into
 /tmp/core-test-<timestamp>.tar.gz: report.txt, player.log, lms-status.log,
 lms-events.log, slimproto.pcap, slimproto.txt (decoded capture), run-info.txt,
-shm-extension.txt (11 extension hex dumps over 10 seconds). The final phase
-restarts with -v and checks the FLAC track's SHM ABI, generation, rate and pacing.
+shm-extension.txt (11 extension hex dumps over 10 seconds), and transition WAVs.
+An SHM phase checks ABI, generation, rate and pacing. Final WAV phases compare
+ReplayGain levels and verify a five-second crossfade, restoring changed LMS prefs.
 Exit status 0 only if every check passes.
 """
 import argparse
+import array
+import math
 import mmap
 import os
 import re
@@ -115,6 +118,61 @@ class Cli:
         return out
 
 
+class PreferenceGuard:
+    """Restore every changed player preference, including partial setup failures."""
+    def __init__(self, cli, report):
+        self.cli, self.report, self.saved = cli, report, {}
+
+    def apply(self, name, value):
+        reply = self.cli.player(f"playerpref {name} {urllib.parse.quote(str(value), safe='')}")
+        tokens = Cli.tokens(reply)
+        try:
+            accepted = tokens[1:3] == ['playerpref', name] and float(tokens[-1]) == float(value)
+        except (ValueError, IndexError):
+            accepted = False
+        if not accepted: raise RuntimeError(f"playerpref {name} was not acknowledged: {reply}")
+
+    def set(self, name, value):
+        if name not in self.saved:
+            reply = self.cli.player(f"playerpref {name} ?")
+            tokens = Cli.tokens(reply)
+            if len(tokens) < 4 or tokens[1:3] != ["playerpref", name] or tokens[-1] in ("?", "") :
+                raise RuntimeError(f"cannot save playerpref {name}: {reply}")
+            self.saved[name] = tokens[-1]
+        self.apply(name, value)
+
+    def restore(self):
+        errors = []
+        handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            for name, value in reversed(list(self.saved.items())):
+                try:
+                    self.apply(name, value)
+                except Exception as e:
+                    errors.append(f"{name}: {e}")
+        finally:
+            signal.signal(signal.SIGINT, handler)
+        if errors:
+            self.report.check("prefs", "restore", False, "; ".join(errors))
+        elif self.saved:
+            self.report.check("prefs", "restore", True, f"restored {', '.join(self.saved)}")
+
+
+def read_wav(path):
+    """Our app's fixed integer-stereo WAV, checked before level/timeline analysis."""
+    with open(path, "rb") as f:
+        header, raw = f.read(44), f.read()
+    if len(header) != 44 or header[:4] != b"RIFF" or header[8:16] != b"WAVEfmt " or header[36:40] != b"data":
+        raise ValueError("expected yeney-player PCM WAV")
+    if struct.unpack_from("<HH", header, 20) != (1, 2) or struct.unpack_from("<H", header, 34)[0] != 32:
+        raise ValueError("expected 32-bit stereo PCM")
+    rate = struct.unpack_from("<I", header, 24)[0]
+    values = array.array("i")
+    values.frombytes(raw)
+    if sys.byteorder != "little": values.byteswap()
+    return rate, values
+
+
 class EventListener:
     """Keeps an LMS CLI 'listen 1' connection and logs every event line."""
 
@@ -169,13 +227,13 @@ def lms_host_from_config():
 class PlayerProcess:
     """Runs yeney-player and keeps its event lines with timestamps."""
 
-    def __init__(self, lms, logpath, max_rate=MAX_RATE, append=False, shm=False):
+    def __init__(self, lms, logpath, max_rate=MAX_RATE, append=False, shm=False, wav=None):
         self.lines = []
         self.lock = threading.Lock()
         self.log = open(logpath, "a" if append else "w")
         self.proc = subprocess.Popen(
             ["./yeney-player", "-n", PLAYER_NAME, "-m", PLAYER_MAC, "-s", lms,
-             "--sink", "null", "--max-rate", str(max_rate), "-d", "1"] + (["-v"] if shm else []),
+             "--sink", "wav:" + str(wav) if wav else "null", "--max-rate", str(max_rate), "-d", "1"] + (["-v"] if shm else []),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
@@ -385,6 +443,8 @@ class Run:
         self.results = []   # (track, check, ok, detail)
         self.phases = []    # (label, start, end, songinfo, max_rate, native_192k)
         self.native_start = None
+        self.rg_phases = []
+        self.cross_phase = None
         self.report = open(os.path.join(outdir, "report.txt"), "w")
         self.status_log = open(os.path.join(outdir, "lms-status.log"), "w")
 
@@ -521,6 +581,100 @@ class Run:
                    f"+{advanced} frames in {elapsed:.3f}s at {rate} Hz; ratio={ratio:.4f}")
         self.finish_phase(label, start, info)
 
+    def transition_device_phases(self, lms, prefs):
+        logpath = os.path.join(self.outdir, "player.log")
+        def restart(path):
+            self.cli.player("stop")
+            self.player.stop()
+            self.player = PlayerProcess(lms, logpath, MAX_RATE, append=True, wav=path)
+            for _ in range(20):
+                if any("HELO" in line for line in self.player.since(0)): return
+                time.sleep(.5)
+            raise RuntimeError("WAV player sent no HELO")
+        prefs.set("transitionType", 0)
+        for mode, label in [(1, "ReplayGain on"), (0, "ReplayGain off")]:
+            prefs.set("replayGainMode", mode)
+            path = os.path.join(self.outdir, "replaygain-on.wav" if mode else "replaygain-off.wav")
+            restart(path)
+            start = time.time()
+            self.cli.player("playlistcontrol cmd:load track_id:47145")
+            if not self.wait_playing(): raise RuntimeError(f"{label}: playback never advanced")
+            self.measure(PLAY_SECS)
+            self.cli.player("stop")
+            self.player.stop()
+            self.rg_phases.append((label, start, time.time(), path))
+        prefs.set("transitionSmart", 0)
+        prefs.set("transitionType", 1)
+        prefs.set("transitionDuration", 5)
+        path = os.path.join(self.outdir, "crossfade.wav")
+        restart(path)
+        info = Cli.fields(self.cli.raw("songinfo 0 100 track_id:44436 tags:aloTd"))
+        duration = float(info.get("duration") or 0)
+        if duration <= 20: raise RuntimeError("crossfade first track duration must exceed 20 seconds")
+        self.cli.player("playlistcontrol cmd:load track_id:44436")
+        self.cli.player("playlistcontrol cmd:add track_id:41965")
+        if not self.wait_playing(): raise RuntimeError("crossfade playlist never started")
+        self.cli.player(f"time {duration - 20:.3f}")
+        start = time.time()
+        self.measure(28)
+        self.cli.player("stop")
+        self.player.stop()
+        self.cross_phase = (start, time.time(), path)
+
+    def analyse_transitions(self, messages):
+        try:
+            gains = []
+            wavs = []
+            for label, t0, t1, path in self.rg_phases:
+                starts = [m for m in messages if m[2] == "strm" and len(m[3]) >= 24
+                          and m[3][0] == ord('s') and t0 <= m[0] <= t1]
+                if not starts: raise ValueError(f"{label}: no captured strm gain")
+                gains.append(struct.unpack_from(">I", starts[0][3], 14)[0])
+                wavs.append(read_wav(path))
+            if len(wavs) == 2:
+                rate, on = wavs[0]; other_rate, off = wavs[1]
+                if rate != other_rate: raise ValueError("ReplayGain WAV rates differ")
+                lo, hi = rate * 2 * 2, rate * 8 * 2
+                if min(len(on), len(off)) < hi: raise ValueError("ReplayGain aligned 2–8s window unavailable")
+                on_power = sum(float(v) ** 2 for v in on[lo:hi])
+                off_power = sum(float(v) ** 2 for v in off[lo:hi])
+                if not on_power or not off_power: raise ValueError("ReplayGain window is silent")
+                measured = 10 * math.log10(on_power / off_power)
+                expected = 20 * math.log10((gains[0] or 65536) / (gains[1] or 65536))
+                self.check("ReplayGain", "level", gains[0] not in (0, 65536) and gains[1] in (0, 65536)
+                           and abs(measured - expected) <= .1,
+                           f"sent={gains}, expected={expected:.3f} dB, measured={measured:.3f} dB (aligned 2–8s)")
+            if self.cross_phase:
+                t0, t1, path = self.cross_phase
+                lines = self.player.since(t0, t1)
+                starts = [re.search(r"crossfade start frame=(\d+) length=(\d+) rate=(\d+)", l) for l in lines]
+                starts = [m for m in starts if m]
+                ends = [re.search(r"crossfade complete frame=(\d+)", l) for l in lines]
+                ends = [m for m in ends if m]
+                if not starts or not ends: raise ValueError("crossfade start/completion missing from player log")
+                begin, length, rate = map(int, starts[0].groups())
+                finish = int(ends[0].group(1))
+                wav_rate, values = read_wav(path)
+                frames = len(values) // 2
+                boundaries = [re.search(r"boundary frame=(\d+) rate=(\d+)", line) for line in lines]
+                boundaries = [int(m.group(1)) for m in boundaries if m]
+                starts_wire = [m for m in messages if m[2] == "strm" and len(m[3]) >= 24
+                               and m[3][0] == ord('s') and t0 <= m[0] <= t1]
+                sent_cross = any(m[3][9] == 5 and m[3][10] == ord('1') for m in starts_wire)
+                self.check("Crossfade", "window", abs(length / rate - 5) <= .1 and finish - begin == length
+                           and begin in boundaries and sent_cross,
+                           f"overlap starts {length/rate:.3f}s before old end; frames {begin}..{finish}; length={length}")
+                interval = values[begin * 2:finish * 2]
+                # A missing-output gap appears as a silent ten-ms block in this music window.
+                chunk = max(2, rate // 100 * 2)
+                no_gap = len(interval) == length * 2 and all(any(interval[i:i + chunk]) for i in range(0, len(interval), chunk))
+                self.check("Crossfade", "wav", wav_rate == rate and frames > finish and no_gap,
+                           f"WAV frames={frames}, rate={wav_rate}; complete overlap, no silent 10ms blocks")
+                bad = [l for l in lines if re.search(r"STMo|STMn|error", l)]
+                self.check("Crossfade", "clean", not bad, f"underrun/error lines={bad[:3]}")
+        except (OSError, ValueError, ZeroDivisionError) as e:
+            self.check("Transitions", "analysis", False, str(e))
+
     def finish_phase(self, label, t_start, info, max_rate=MAX_RATE, native_192k=False):
         t_end = time.time()
         self.phases.append((label, t_start, t_end, info, max_rate, native_192k))
@@ -565,6 +719,7 @@ class Run:
                        and f"MaxSampleRate={NATIVE_MAX_RATE}" in caps,
                        f"second-phase HELO: {','.join(caps) or 'missing'}; "
                        f"expected MaxSampleRate={NATIVE_MAX_RATE}, {','.join(EXPECTED_CAPS)}")
+        self.analyse_transitions(messages)
         for label, t0, t1, info, max_rate, native_192k in self.phases:
             starts = [m for m in messages if m[2] == "strm" and m[1] == "S>P"
                       and len(m[3]) >= 24 and chr(m[3][0]) == "s" and t0 <= m[0] <= t1]
@@ -610,9 +765,10 @@ def main():
     stamp = time.strftime("%Y%m%d-%H%M%S")
     outdir = f"/tmp/core-test-{stamp}"
     os.makedirs(outdir)
+    disabled_formats = cli.raw("pref disabledformats ?")
     build = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     with open(os.path.join(outdir, "run-info.txt"), "w") as f:
-        f.write(f"yeney-core={build or '?'}\nlms={lms}\nplayer={PLAYER_NAME} {PLAYER_MAC}\n"
+        f.write(f"yeney-core={build or '?'}\nlms={lms}\ndisabledformats={disabled_formats}\nplayer={PLAYER_NAME} {PLAYER_MAC}\n"
                 f"tracks={' '.join(t[1] for t in TRACKS + [NATIVE_TRACK])}\n"
                 f"initial_max_rate={MAX_RATE}\nnative_max_rate={NATIVE_MAX_RATE}\nshm_max_rate={MAX_RATE}\nshm_track=44436\nstarted={time.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
@@ -622,6 +778,7 @@ def main():
     player = PlayerProcess(lms, os.path.join(outdir, "player.log"))
     run = Run(cli, player, outdir)
     run.say(f"yeney-core {build or '?'}; LMS {lms}; player {PLAYER_NAME} ({PLAYER_MAC})")
+    prefs = PreferenceGuard(cli, run)
     if capture and capture.error:
         run.say(f"capture disabled: {capture.error}")
 
@@ -664,9 +821,15 @@ def main():
             raise KeyboardInterrupt
         run.check("SHM setup", "connect", True, "SHM player sent HELO")
         run.shm_phase()
+        run.transition_device_phases(lms, prefs)
+        player = run.player
     except KeyboardInterrupt:
-        run.say("stopped early")
+        run.check("run", "interrupted", False, "stopped early")
+    except Exception as e:
+        run.check("run", "error", False, str(e))
     finally:
+        player = run.player
+        prefs.restore()
         try:
             cli.player("stop")
         except OSError:
@@ -684,6 +847,8 @@ def main():
 
     if capture and not capture.error and os.path.exists(pcap):
         run.analyse_capture(pcap, lms)
+    elif run.rg_phases or run.cross_phase:
+        run.check("Transitions", "capture", False, "capture is required to verify sent ReplayGain")
 
     failed = [r for r in run.results if not r[2]]
     run.say("")

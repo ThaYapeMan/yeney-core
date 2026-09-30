@@ -51,8 +51,13 @@ recording sink that partially accepts writes. Ports 3483 on loopback must be fre
 for discovery/server-switch tests. No frontend exists. See
 [the protocol contract and evidence](docs/slimproto.md).
 
+ReplayGain, linear fades and same-rate crossfade are supported; LMS volume never
+scales PCM. See [transition arithmetic, timing and limits](docs/transitions.md).
+Native ALAC requires **Apple Lossless -> Native** enabled in LMS File Types;
+otherwise LMS can convert it losslessly to FLAC.
+
 ALAC uses our streaming MP4 demuxer; more than two channels is unsupported.
-DSP/fades, TLS and ICY metadata are outside this round. HTTP PCM
+TLS and ICY metadata are outside this round. HTTP PCM
 responses must use Content-Length or connection-close framing, without transfer
 encoding. No changes to YeneY or LampaStream are required.
 
