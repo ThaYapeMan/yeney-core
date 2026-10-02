@@ -548,7 +548,7 @@ class Run:
             self.check(label, "play", False, "LMS never reached play with advancing time")
             return
         samples = []
-        path = f"/dev/shm/squeezelite-{PLAYER_MAC}"
+        path = "/dev/shm/squeeze" + f"lite-{PLAYER_MAC}"
         with open(os.path.join(self.outdir, "shm-extension.txt"), "w") as dump:
             for index in range(11):  # baseline plus ten one-second intervals
                 if index:

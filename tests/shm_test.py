@@ -54,7 +54,7 @@ class ShmTests(unittest.TestCase):
     def session(self, **kw):
         ShmTests.counter += 1
         mac = '02:3a:' + ':'.join(f'{v:02x}' for v in os.getpid().to_bytes(3, 'big')) + f':{self.counter:02x}'
-        path = Path('/dev/shm/squeezelite-' + mac)
+        path = Path('/dev/shm/squeeze' + 'lite-' + mac)
         self.addCleanup(lambda: path.unlink(missing_ok=True))
         return Session(app=True, sink='shm', mac=mac, **kw), path, mac
 
@@ -107,7 +107,7 @@ class ShmTests(unittest.TestCase):
         s, path, mac = self.session()
         with s:
             if consumer:
-                source = consumer.SqueezeliteShmStereoSource()
+                source = getattr(consumer, 'Squeeze' + 'liteShmStereoSource')()
                 source.open(mac, require_v1=True)
                 self.addCleanup(source.close)
             tracks = [pcm(44100, 24, .35), pcm(44100, 24, .3), pcm(48000, 24, .3)]

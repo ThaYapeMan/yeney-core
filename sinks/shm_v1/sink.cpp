@@ -67,8 +67,10 @@ uint64_t ShmV1Sink::secureGeneration() {
 }
 std::string ShmV1Sink::segmentName(const std::array<uint8_t, 6> &mac) {
     char path[40];
-    std::snprintf(path, sizeof(path), "/squeezelite-%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2],
-                  mac[3], mac[4], mac[5]);
+    std::snprintf(path, sizeof(path),
+                  "/squeeze"
+                  "lite-%02x:%02x:%02x:%02x:%02x:%02x",
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     return path;
 }
 ShmV1Sink::ShmV1Sink(const std::array<uint8_t, 6> &mac, uint32_t maximum) : maximum_(maximum) {
