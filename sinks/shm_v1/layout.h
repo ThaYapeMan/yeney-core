@@ -45,6 +45,30 @@ static_assert(offsetof(Layout, extension) + offsetof(Extension, gaps) == 32876);
 static_assert(offsetof(Layout, extension) + offsetof(Extension, padding) == 32884);
 static_assert(sizeof(Extension) == 40);
 static_assert(sizeof(Layout) == 32888);
+struct TimingBlock {
+    uint8_t magic[4], version[2], reserved0[2];
+    uint8_t anchor_abs_frame[8], anchor_play_mono_ns[8], rate_milli_hz[4];
+    uint8_t event_seq[4], event_flags[4], event_abs_frame[8], event_value[8], reserved[12];
+};
+struct TimedLayout {
+    Layout legacy;
+    TimingBlock timing;
+};
+static_assert(sizeof(TimingBlock) == 64);
+static_assert(offsetof(TimedLayout, timing) == 32888);
+static_assert(sizeof(TimedLayout) == 32952);
+static_assert(offsetof(TimingBlock, magic) == 0);
+static_assert(offsetof(TimingBlock, version) == 4);
+static_assert(offsetof(TimingBlock, anchor_abs_frame) == 8);
+static_assert(offsetof(TimingBlock, anchor_play_mono_ns) == 16);
+static_assert(offsetof(TimingBlock, rate_milli_hz) == 24);
+static_assert(offsetof(TimingBlock, event_seq) == 28);
+static_assert(offsetof(TimingBlock, event_flags) == 32);
+static_assert(offsetof(TimingBlock, event_abs_frame) == 36);
+static_assert(offsetof(TimingBlock, event_value) == 44);
+static_assert(offsetof(TimingBlock, reserved) == 52);
+constexpr uint32_t timingMagic = 0x54504e59; // YNPT
+constexpr uint32_t FLUSH = 1, PAUSE = 2, RESUME = 4, DISCONTINUITY = 8, SYNC_PAUSE = 64, SYNC_SKIP = 128;
 constexpr uint32_t magic = 0x48555345;
 constexpr uint32_t oddSuccessor(uint32_t n) { return n + (n & 1 ? 2u : 1u); }
 int16_t sample16(int32_t);

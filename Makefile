@@ -12,7 +12,7 @@ ALAC_C = EndianPortable ALACBitUtilities ag_dec dp_dec matrix_dec
 ALAC_OBJS = $(addprefix build/alac/,$(addsuffix .o,$(ALAC_C))) build/alac/ALACDecoder.o
 CORE_OBJS = core/transitions.o core/protocol.o core/player.o core/decoder.o core/mp4.o $(ALAC_OBJS)
 APP_OBJS = apps/yeney-player/main.o apps/yeney-player/sinks.o sinks/shm_v1/sink.o
-TEST_OBJS = tests/shm_unit.o tests/unit.o tests/fixture.o tests/decoder_fixture.o
+TEST_OBJS = tests/clock_unit.o  tests/shm_unit.o tests/unit.o tests/fixture.o tests/decoder_fixture.o
 
 all: libyeneycore.a yeney-player
 
@@ -52,7 +52,11 @@ demux-sanitized: tests/demux_fixture.cpp core/mp4.cpp core/protocol.cpp core/mp4
 shm-unit: tests/shm_unit.o sinks/shm_v1/sink.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ -pthread -Wl,--wrap=getrandom -Wl,--wrap=open
 
-test: format-check shm-unit all unit-test test-player decoder-test demux-sanitized
+clock-unit: tests/clock_unit.o sinks/shm_v1/sink.o
+	$(CXX) $(CXXFLAGS) -o $@ $^ -pthread
+
+test: format-check clock-unit shm-unit all unit-test test-player decoder-test demux-sanitized
+	./clock-unit
 	./unit-test
 	./shm-unit
 	python3 tests/fake_lms.py
@@ -62,7 +66,7 @@ test: format-check shm-unit all unit-test test-player decoder-test demux-sanitiz
 	python3 tests/transitions_test.py
 
 clean:
-	rm -f $(CORE_OBJS) $(APP_OBJS) $(TEST_OBJS) $(CORE_OBJS:.o=.d) $(APP_OBJS:.o=.d) $(TEST_OBJS:.o=.d) libyeneycore.a yeney-player unit-test test-player decoder-test demux-sanitized shm-unit decoder-benchmark decoder-benchmark.d
+	rm -f $(CORE_OBJS) $(APP_OBJS) $(TEST_OBJS) $(CORE_OBJS:.o=.d) $(APP_OBJS:.o=.d) $(TEST_OBJS:.o=.d) libyeneycore.a yeney-player clock-unit unit-test test-player decoder-test demux-sanitized shm-unit decoder-benchmark decoder-benchmark.d
 
 -include $(CORE_OBJS:.o=.d) $(APP_OBJS:.o=.d) $(TEST_OBJS:.o=.d)
 .PHONY: all clean test format format-check

@@ -14,3 +14,5 @@ __pycache__/
 /shm-unit
 
 /decoder-benchmark
+
+/clock-unit

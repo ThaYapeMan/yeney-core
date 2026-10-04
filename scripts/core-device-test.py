@@ -421,7 +421,7 @@ def describe(message):
 def shm_snapshot(path):
     """Copy metadata/extension only after equal even sequence reads."""
     with open(path, "rb") as f:
-        if os.fstat(f.fileno()).st_size != 32888:
+        if os.fstat(f.fileno()).st_size < 32888:
             raise ValueError("SHM segment size is not 32888")
         with mmap.mmap(f.fileno(), 32888, access=mmap.ACCESS_READ) as mm:
             for _ in range(1000):
@@ -562,7 +562,7 @@ class Run:
                 samples.append((stamp, header, ext))
                 dump.write(f"sample={index} monotonic={stamp:.6f} offset=32848\n{raw.hex(' ')}\n")
                 dump.flush()
-        self.check(label, "abi", all(e[0] == 0x48555345 and e[1] == 1 and e[2] == 0
+        self.check(label, "abi", all(e[0] == 0x48555345 and e[1] == 1 and not (e[2] & ~1)
                    and e[3] % 2 == 0 for _, _, e in samples),
                    "magic/version/flags and stable even sequence checked on 11 samples")
         self.check(label, "generation", len({e[4] for _, _, e in samples}) == 1,

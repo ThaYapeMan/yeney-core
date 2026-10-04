@@ -6,6 +6,7 @@
 
 #include "player.h"
 #include "decoder.h"
+#include "play_clock.h"
 #include "ring.h"
 #include "transitions.h"
 #include <algorithm>
@@ -428,7 +429,10 @@ struct Player::Impl {
                 flushStreaming();
                 break;
             case 'p':
-                sink.pause();
+                if (value)
+                    sink.syncPause(uint64_t(value) * 1000000);
+                else
+                    sink.pause();
                 paused = true;
                 userPaused = !value;
                 wake = value ? jiffies() + value : 0;
@@ -450,7 +454,11 @@ struct Player::Impl {
                 break;
             case 'a':
                 cancelOverlap();
-                skip += uint64_t(value) * (audible ? audible->format.rate : 48000) / 1000;
+                {
+                    const uint64_t frames = uint64_t(value) * (audible ? audible->format.rate : 48000) / 1000;
+                    sink.syncSkip(frames);
+                    skip += frames;
+                }
                 break;
             case 's':
                 start(b);
@@ -837,6 +845,12 @@ struct Player::Impl {
                                 ? crossFrame(t->output[i], overlap.next->output[i], t->replayGain,
                                              overlap.next->replayGain, overlap.position + i, overlap.length)
                                 : processFrame(t->output[i], t->replayGain, envelope(*t, t->played + i));
+            }
+            if (sink.paced()) {
+                timespec stamp{};
+                clock_gettime(CLOCK_MONOTONIC, &stamp);
+                const uint64_t ns = uint64_t(stamp.tv_sec) * 1000000000 + stamp.tv_nsec;
+                sink.playTiming(submitted, scheduledPlayNs(now, ns, credit), t->format.rate * 1000);
             }
             size_t accepted = sink.write(frames, count);
             if (accepted > count)

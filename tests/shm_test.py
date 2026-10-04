@@ -20,7 +20,7 @@ EXTENSION = struct.Struct('<IHHIQQQ4x')
 def snapshot(path):
     # Reopen is intentional: validates backing file size independently of the C layout.
     with open(path, 'rb') as f:
-        if os.fstat(f.fileno()).st_size != 32888:
+        if os.fstat(f.fileno()).st_size < 32888:
             raise AssertionError('SHM size is not 32888')
         with mmap.mmap(f.fileno(), 32888, access=mmap.ACCESS_READ) as mm:
             for _ in range(100):
@@ -32,7 +32,7 @@ def snapshot(path):
                 if first == last:
                     h = HEADER.unpack_from(raw, 56)
                     e = EXTENSION.unpack_from(raw, 32848)
-                    assert e[:3] == (0x48555345, 1, 0), e
+                    assert e[:2] == (0x48555345, 1) and not (e[2] & ~1), e
                     assert h[0] == 16384 and h[1] == (e[5] * 2) % 16384
                     return raw, h, e
     raise AssertionError('no stable SHM snapshot')
@@ -57,6 +57,38 @@ class ShmTests(unittest.TestCase):
         path = Path('/dev/shm/squeeze' + 'lite-' + mac)
         self.addCleanup(lambda: path.unlink(missing_ok=True))
         return Session(app=True, sink='shm', mac=mac, **kw), path, mac
+
+    def test_player_timing_sync_commands(self):
+        s, path, _ = self.session()
+        def timing():
+            with path.open('rb') as f:
+                with mmap.mmap(f.fileno(), 32952, access=mmap.ACCESS_READ) as mm:
+                    for _ in range(100):
+                        seq = struct.unpack_from('<I', mm, 32856)[0]
+                        raw = mm[32888:32952]
+                        if not seq & 1 and seq == struct.unpack_from('<I', mm, 32856)[0]:
+                            return struct.unpack('<4sH2xQQIIIQq12x', raw)
+            raise AssertionError('unstable timing')
+        with s:
+            body, _ = pcm(seconds=2)
+            s.lms.strm('s', s.source(body))
+            s.lms.wait('STMs')
+            s.lms.strm('p', value=30)
+            deadline = time.monotonic() + 1
+            while timing()[6] != 64 and time.monotonic() < deadline:
+                time.sleep(.001)
+            pause = timing()
+            self.assertEqual(pause[0:2], (b'YNPT', 1))
+            self.assertEqual(pause[6:7], (64,))
+            self.assertEqual(pause[8], 30_000_000)
+            time.sleep(.06)
+            self.assertEqual(timing()[6], 64)
+            s.lms.strm('a', value=20)
+            deadline = time.monotonic() + 1
+            while timing()[6] != 128 and time.monotonic() < deadline:
+                time.sleep(.001)
+            self.assertEqual(timing()[6:7], (128,))
+            self.assertEqual(timing()[8], 882)
 
     def test_01_drop_in_lifecycle_and_quiet(self):
         s, path, _ = self.session(app_args=['-v', '-o', 'hw:CARD=Dummy,DEV=0'])

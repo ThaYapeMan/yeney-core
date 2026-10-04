@@ -8,7 +8,7 @@ The core pacer supplies real-time timing, including with `-o hw:CARD=Dummy,DEV=0
 
 The POSIX name is `/squeezelite-<mac>`, backed by `/dev/shm/squeezelite-<mac>`.
 MAC bytes render as lowercase two-digit hex separated by colons. The mapping is
-exactly 32888 bytes, little endian. `sinks/shm_v1/layout.h` statically asserts
+32952 bytes; the original 32888-byte prefix is unchanged, little endian. `sinks/shm_v1/layout.h` statically asserts
 every field offset, total size, little endian and the 56-byte pthread lock ABI.
 Unsupported host ABIs fail compilation rather than publishing an incompatible
 segment.
@@ -24,7 +24,7 @@ segment.
 | 80–32847 | PCM | 8192 stereo frames, interleaved int16 L/R |
 | 32848 | magic | uint32 0x48555345; bytes 45 53 55 48 |
 | 32852 | abi_version | uint16, 1 |
-| 32854 | flags | uint16, zero |
+| 32854 | flags | uint16, bit 0 indicates valid player timing |
 | 32856 | write_seq | uint32, odd writer/even stable |
 | 32860 | generation | uint64, secure random lifetime ID |
 | 32868 | abs_write_pos | uint64, exclusive exported stereo-frame position |
@@ -145,3 +145,54 @@ Producer evidence is ThaYapeMan/squeezelite at
   :276–279 exports the resulting audio/silence state.
 
 These references identify protocol facts and observable behaviour, not reused code.
+
+## Optional player-clock block (YNPT v1)
+
+The 64 bytes at offset 32888 are optional. Readers must check mapping length,
+extension flags bit 0, magic `YNPT`, version 1 and a nonzero rate. Legacy readers
+can still map exactly 32888 bytes. All timing fields are byte arrays on the writer
+and little endian on the wire; the same extension write_seq covers PCM, positions,
+timing and events. Initial flags remain zero until a paced PCM export supplies an
+anchor. Existing sinks inherit no-op timing callbacks, so YeneY can compile this
+sink without supplying timing and its prefix reader remains unchanged.
+
+| Relative byte | Field | Type |
+|---:|---|---|
+| 0 | magic | four bytes YNPT |
+| 4 | version | uint16, 1 |
+| 6 | reserved | two zero bytes |
+| 8 | anchor_abs_frame | uint64, exported stereo-frame coordinate |
+| 16 | anchor_play_mono_ns | uint64, CLOCK_MONOTONIC nanoseconds |
+| 24 | rate_milli_hz | uint32, effective pacer Hz times 1000 |
+| 28 | event_seq | uint32, advances for each event |
+| 32 | event_flags | uint32 |
+| 36 | event_abs_frame | uint64, exclusive export position at event |
+| 44 | event_value | int64 |
+| 52 | reserved | twelve zero bytes |
+
+For exported frame F, play time is anchor_play_mono_ns +
+(F - anchor_abs_frame) * 1e12 / rate_milli_hz. The anchor refers to the first
+frame in the latest successful export. The core's accumulated pacing credit
+covers the interval ending at its current millisecond monotonic tick; the first
+frame's schedule is that tick minus remaining credit. This is the schedule whose
+consumption advances Sink::audibleFrames and LMS elapsed, not the later memcpy
+completion. There is no additional block look-ahead: blocks consume already-due
+credit (at most 20 ms), in batches of at most 256 frames. Millisecond scheduling
+quantisation is preserved; this extension does not change pacing or elapsed.
+
+Events are FLUSH=1, PAUSE=2, RESUME=4, DISCONTINUITY=8, SYNC_PAUSE=64,
+SYNC_SKIP=128. SYNC_PAUSE carries nanoseconds and SYNC_SKIP carries skipped
+source frames. A sync pause retains its event through automatic resume, so a
+reader never mistakes its running=false/true transition for a seek. Subsequent
+anchors include the pause. A skip removes content before export: export positions
+remain continuous, while subsequent PCM represents source content earlier than
+it would have without the skip. No fictitious export positions are inserted.
+Track boundaries, including gapless boundaries, publish DISCONTINUITY with the
+first PCM of the next track; generation and positions retain their existing
+semantics. Rate changes likewise publish with their first PCM. User pauses and
+resumes carry their distinct events; stop and sink flush carry FLUSH.
+
+The block retains the latest event, not an event queue. Readers should poll fast
+enough to see corrections, retain the prior anchor for unread PCM preceding
+an event boundary, and fail closed if events were lost. A missed export is still
+reported through gap_seq. Event counters wrap modulo 2^32.

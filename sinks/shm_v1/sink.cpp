@@ -16,7 +16,9 @@
 #include <unistd.h>
 namespace yeney {
 namespace {
-void put64(uint8_t *p, uint64_t value) { std::memcpy(p, &value, 8); }
+template <class T> void put(uint8_t *p, T value) { std::memcpy(p, &value, sizeof(value)); }
+void put64(uint8_t *p, uint64_t value) { put(p, value); }
+shm_v1::TimingBlock &timing(shm_v1::Layout *p) { return reinterpret_cast<shm_v1::TimedLayout *>(p)->timing; }
 void begin(shm_v1::Layout *p) {
     auto seq = __atomic_load_n(&p->extension.sequence, __ATOMIC_SEQ_CST);
     __atomic_store_n(&p->extension.sequence, shm_v1::oddSuccessor(seq), __ATOMIC_SEQ_CST);
@@ -77,12 +79,12 @@ ShmV1Sink::ShmV1Sink(const std::array<uint8_t, 6> &mac, uint32_t maximum) : maxi
     int fd = ::shm_open(segmentName(mac).c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0666);
     if (fd < 0)
         throw unavailable(std::strerror(errno));
-    if (::ftruncate(fd, sizeof(shm_v1::Layout)) != 0) {
+    if (::ftruncate(fd, sizeof(shm_v1::TimedLayout)) != 0) {
         auto why = std::string(std::strerror(errno));
         ::close(fd);
         throw unavailable(why);
     }
-    void *address = ::mmap(nullptr, sizeof(shm_v1::Layout), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    void *address = ::mmap(nullptr, sizeof(shm_v1::TimedLayout), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     ::close(fd);
     if (address == MAP_FAILED)
         throw unavailable(std::strerror(errno));
@@ -117,10 +119,13 @@ ShmV1Sink::ShmV1Sink(const std::array<uint8_t, 6> &mac, uint32_t maximum) : maxi
         put64(mapping_->extension.position, 0);
         put64(mapping_->extension.gaps, 0);
         std::memset(mapping_->extension.padding, 0, sizeof(mapping_->extension.padding));
+        std::memset(&timing(mapping_), 0, sizeof(shm_v1::TimingBlock));
+        put(timing(mapping_).magic, shm_v1::timingMagic);
+        put(timing(mapping_).version, uint16_t(1));
         end(mapping_);
         ::pthread_rwlock_unlock(&mapping_->lock);
     } catch (...) {
-        ::munmap(mapping_, sizeof(shm_v1::Layout));
+        ::munmap(mapping_, sizeof(shm_v1::TimedLayout));
         mapping_ = nullptr;
         throw;
     }
@@ -128,7 +133,7 @@ ShmV1Sink::ShmV1Sink(const std::array<uint8_t, 6> &mac, uint32_t maximum) : maxi
 ShmV1Sink::~ShmV1Sink() {
     if (mapping_) {
         stop();
-        ::munmap(mapping_, sizeof(shm_v1::Layout));
+        ::munmap(mapping_, sizeof(shm_v1::TimedLayout));
     }
     // LampaStream owns unlink and orphan cleanup; do not destroy the shared lock.
 }
@@ -143,6 +148,7 @@ void ShmV1Sink::publish(const Frame *frames, size_t count) {
         mapping_->pcm[scalar] = shm_v1::sample16(frames[i].left);
         mapping_->pcm[scalar + 1] = shm_v1::sample16(frames[i].right);
     }
+    const uint64_t first = exported_;
     exported_ += count;
     gaps_ += pendingGaps_;
     pendingGaps_ = 0;
@@ -154,10 +160,46 @@ void ShmV1Sink::publish(const Frame *frames, size_t count) {
     }
     put64(mapping_->extension.position, exported_);
     put64(mapping_->extension.gaps, gaps_);
+    auto &t = timing(mapping_);
+    if (timed_ && count) {
+        mapping_->extension.flags |= 1;
+        put64(t.anchor_abs_frame, first);
+        put64(t.anchor_play_mono_ns, playNs_);
+        put(t.rate_milli_hz, timingRate_);
+    }
+    put(t.event_seq, eventSeq_);
+    put(t.event_flags, eventFlags_);
+    put64(t.event_abs_frame, eventFrame_);
+    put(t.event_value, eventValue_);
     end(mapping_);
     ::pthread_rwlock_unlock(&mapping_->lock);
 }
-void ShmV1Sink::trackBoundary(uint64_t, const Format &format, bool) { rate_ = format.rate; }
+void ShmV1Sink::event(uint32_t flags, int64_t value) {
+    ++eventSeq_;
+    eventFlags_ = flags;
+    eventValue_ = value;
+    eventFrame_ = exported_;
+}
+void ShmV1Sink::playTiming(uint64_t, uint64_t ns, uint32_t rate) {
+    timed_ = ns && rate;
+    playNs_ = ns;
+    timingRate_ = rate;
+}
+void ShmV1Sink::syncPause(uint64_t ns) {
+    syncPaused_ = true;
+    paused_ = true;
+    active_ = false;
+    event(shm_v1::SYNC_PAUSE, int64_t(ns));
+    publish(nullptr, 0);
+}
+void ShmV1Sink::syncSkip(uint64_t frames) {
+    event(shm_v1::SYNC_SKIP, int64_t(frames));
+    publish(nullptr, 0);
+}
+void ShmV1Sink::trackBoundary(uint64_t, const Format &format, bool) {
+    rate_ = format.rate;
+    event(shm_v1::DISCONTINUITY);
+}
 size_t ShmV1Sink::write(const Frame *frames, size_t count) {
     if (paused_)
         return 0;
@@ -169,12 +211,23 @@ size_t ShmV1Sink::write(const Frame *frames, size_t count) {
     return count;
 }
 void ShmV1Sink::pause() {
+    syncPaused_ = false;
+    event(shm_v1::PAUSE);
     paused_ = true;
     active_ = false;
     publish(nullptr, 0);
 }
-void ShmV1Sink::resume() { paused_ = false; } // running becomes true only with audio.
+void ShmV1Sink::resume() {
+    paused_ = false;
+    if (!syncPaused_) {
+        event(shm_v1::RESUME);
+        publish(nullptr, 0);
+    }
+    syncPaused_ = false;
+} // running becomes true only with audio.
 void ShmV1Sink::stop() {
+    syncPaused_ = false;
+    event(shm_v1::FLUSH);
     active_ = false;
     paused_ = false;
     publish(nullptr, 0);
@@ -188,6 +241,8 @@ void ShmV1Sink::idle() {
     publish(nullptr, 0);
 }
 void ShmV1Sink::flush() {
+    syncPaused_ = false;
+    event(shm_v1::FLUSH);
     active_ = false;
     publish(nullptr, 0);
 }

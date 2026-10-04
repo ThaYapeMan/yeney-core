@@ -27,6 +27,10 @@ public:
     virtual uint32_t maxSampleRate() const { return 48000; }
     virtual void trackBoundary(uint64_t frame, const Format &, bool gaplessCandidate) = 0;
     virtual size_t write(const Frame *, size_t frames) = 0;
+    // Optional paced-play schedule; firstFrame is the cumulative sink coordinate.
+    virtual void playTiming(uint64_t, uint64_t, uint32_t) {}
+    virtual void syncPause(uint64_t) { pause(); }
+    virtual void syncSkip(uint64_t) {}
     virtual void pause() = 0;
     virtual void resume() = 0;
     virtual void stop() = 0;
