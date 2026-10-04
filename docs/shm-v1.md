@@ -196,3 +196,10 @@ The block retains the latest event, not an event queue. Readers should poll fast
 enough to see corrections, retain the prior anchor for unread PCM preceding
 an event boundary, and fail closed if events were lost. A missed export is still
 reported through gap_seq. Event counters wrap modulo 2^32.
+
+A pacing-credit reset/cap or starvation can change the schedule without a
+Slimproto command. A gap greater than 0.1 ms from the previous block's scheduled
+end emits DISCONTINUITY at the next export boundary. Explicit pause/track events
+already identify their boundary and suppress this duplicate marker for their
+first subsequent block. This changes no playback; it prevents a reader from
+extrapolating one anchor across two different pacing intervals.

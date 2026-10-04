@@ -14,7 +14,8 @@ class ShmV1Sink : public Sink {
     uint32_t maximum_, rate_ = 44100;
     uint64_t audible_ = 0, exported_ = 0, gaps_ = 0, pendingGaps_ = 0;
     bool paused_ = false, active_ = false, syncPaused_ = false, timed_ = false;
-    uint64_t playNs_ = 0, eventFrame_ = 0;
+    uint64_t playNs_ = 0, eventFrame_ = 0, expectedPlayNs_ = 0;
+    bool clockEvent_ = true;
     uint32_t timingRate_ = 0, eventSeq_ = 0, eventFlags_ = 0;
     int64_t eventValue_ = 0;
     void event(uint32_t flags, int64_t value = 0);

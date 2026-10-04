@@ -6,6 +6,7 @@
 #include "sink.h"
 #include <algorithm>
 #include <cerrno>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -175,12 +176,18 @@ void ShmV1Sink::publish(const Frame *frames, size_t count) {
     ::pthread_rwlock_unlock(&mapping_->lock);
 }
 void ShmV1Sink::event(uint32_t flags, int64_t value) {
+    clockEvent_ = true;
     ++eventSeq_;
     eventFlags_ = flags;
     eventValue_ = value;
     eventFrame_ = exported_;
 }
 void ShmV1Sink::playTiming(uint64_t, uint64_t ns, uint32_t rate) {
+    // A credit reset/cap or starvation can break the export-time line without
+    // a Slimproto command. Mark that genuine schedule discontinuity explicitly.
+    if (timed_ && ns && rate && expectedPlayNs_ && !clockEvent_ &&
+        (ns > expectedPlayNs_ ? ns - expectedPlayNs_ : expectedPlayNs_ - ns) > 100000)
+        event(shm_v1::DISCONTINUITY);
     timed_ = ns && rate;
     playNs_ = ns;
     timingRate_ = rate;
@@ -207,6 +214,10 @@ size_t ShmV1Sink::write(const Frame *frames, size_t count) {
         return 0;
     active_ = true;
     publish(frames, count);
+    if (timed_) {
+        expectedPlayNs_ = playNs_ + uint64_t(std::llround(double(count) * 1e12 / timingRate_));
+        clockEvent_ = false;
+    }
     audible_ += count; // Skipped analysis exports do not stall the playback clock.
     return count;
 }

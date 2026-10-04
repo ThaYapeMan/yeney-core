@@ -66,6 +66,11 @@ int main() {
         assert(get<uint32_t>(t.event_flags) == shm_v1::DISCONTINUITY &&
                get<uint64_t>(t.event_abs_frame) == 720);
         assert(get<uint32_t>(t.rate_milli_hz) == 44100000 && p->legacy.rate == 44100);
+        // An uncommanded pacer gap must not silently retime older unread PCM.
+        sink.playTiming(960, 1100000000, 44100000);
+        sink.write(pcm, 240);
+        assert(get<uint32_t>(t.event_flags) == shm_v1::DISCONTINUITY);
+        assert(get<uint64_t>(t.event_abs_frame) == 960);
         sink.pause();
         assert(get<uint32_t>(t.event_flags) == shm_v1::PAUSE);
         sink.resume();
