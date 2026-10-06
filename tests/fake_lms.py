@@ -303,6 +303,8 @@ class ProtocolTests(unittest.TestCase):
             boundary = s.lms.wait('STMs')
             self.assertEqual(boundary['elapsed'], 1)
             self.assertEqual(boundary['seconds'], 0)
+            timer = s.lms.timer()
+            self.assertEqual(timer['elapsed'], 1)
             # Squeezebox2::songElapsedSeconds returns before interpolation
             # when both fields are zero. 1 ms makes the next 250 ms read advance.
             def lms_position(packet, age):
@@ -312,6 +314,11 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(lms_position(initial, .75), 0)
             self.assertAlmostEqual(lms_position(boundary, .25), .251)
             self.assertAlmostEqual(lms_position(boundary, .75), .751)
+            self.assertAlmostEqual(lms_position(timer, .25), .251)
+            s.lms.strm('p')
+            paused = s.lms.wait('STMp')
+            self.assertEqual(paused['elapsed'], 0)
+            self.assertEqual(s.lms.timer()['elapsed'], 0)
 
     def test_command_observer(self):
         from unittest.mock import patch

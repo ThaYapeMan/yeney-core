@@ -177,8 +177,9 @@ struct Player::Impl {
         s.elapsed = elapsed();
         // LMS returns early before interpolation when both elapsed fields are
         // zero. A network sink has already announced this audible gapless
-        // boundary; seed interpolation with the smallest wire value (1 ms).
-        if (cfg.startOnSubmit && audible && audible->gapless && event == "STMs" && !s.elapsed)
+        // boundary; keep interpolation seeded through immediate timer reports.
+        if (cfg.startOnSubmit && playing && !paused && audible && audible->gapless &&
+            (event == "STMs" || event == "STMt") && !s.elapsed)
             s.elapsed = 1;
         auto b = statusPacket(event, s, stamp);
         outbound.insert(outbound.end(), b.begin(), b.end());
