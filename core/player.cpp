@@ -175,6 +175,11 @@ struct Player::Impl {
         if (fetching && fetching->decoder)
             s.outputFull += fetching->decoder->outputBuffered() * sizeof(Frame);
         s.elapsed = elapsed();
+        // LMS returns early before interpolation when both elapsed fields are
+        // zero. A network sink has already announced this audible gapless
+        // boundary; seed interpolation with the smallest wire value (1 ms).
+        if (cfg.startOnSubmit && audible && audible->gapless && event == "STMs" && !s.elapsed)
+            s.elapsed = 1;
         auto b = statusPacket(event, s, stamp);
         outbound.insert(outbound.end(), b.begin(), b.end());
         log(event + " jiffies=" + std::to_string(s.jiffies) + " elapsed_ms=" + std::to_string(s.elapsed));

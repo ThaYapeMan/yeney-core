@@ -292,6 +292,27 @@ class ProtocolTests(unittest.TestCase):
             self.assertGreater(end['time'] - start['time'], .15)
             self.assertEqual(s.data(), expected)
 
+    def test_staged_gapless_zero_interpolation(self):
+        with Session(mode='staged') as s:
+            body, _ = pcm(seconds=.5)
+            s.lms.strm('s', s.source(body))
+            initial = s.lms.wait('STMs')
+            self.assertEqual(initial['elapsed'], 0)
+            s.lms.wait('STMd')
+            s.lms.strm('s', s.source(body))
+            boundary = s.lms.wait('STMs')
+            self.assertEqual(boundary['elapsed'], 1)
+            self.assertEqual(boundary['seconds'], 0)
+            # Squeezebox2::songElapsedSeconds returns before interpolation
+            # when both fields are zero. 1 ms makes the next 250 ms read advance.
+            def lms_position(packet, age):
+                if not (packet['elapsed'] or packet['seconds']):
+                    return 0
+                return packet['elapsed'] / 1000 + age
+            self.assertEqual(lms_position(initial, .75), 0)
+            self.assertAlmostEqual(lms_position(boundary, .25), .251)
+            self.assertAlmostEqual(lms_position(boundary, .75), .751)
+
     def test_command_observer(self):
         from unittest.mock import patch
         with patch.dict(os.environ, {'YENEY_TEST_OBSERVER': '1'}), Session() as s:
