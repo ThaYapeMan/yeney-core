@@ -334,6 +334,17 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual([v for v in s.events() if v.startswith('boundary')][-1],
                              'boundary 22050 48000 24 2 0')
 
+    def test_queued_rates_before_audible_start(self):
+        with Session(mode='delayed') as s:
+            for rate in (44100, 48000, 44100):
+                body, _ = pcm(rate, 16, .01)
+                s.lms.strm('s', s.source(body), rate=rate)
+                s.lms.wait('STMd')
+            s.lms.wait('STMu')
+            boundaries = [v for v in s.events() if v.startswith('boundary')]
+            self.assertEqual(len(boundaries), 3)
+            self.assertTrue(all(v.endswith(' 0') for v in boundaries), boundaries)
+
     def test_command_observer(self):
         from unittest.mock import patch
         with patch.dict(os.environ, {'YENEY_TEST_OBSERVER': '1'}), Session() as s:

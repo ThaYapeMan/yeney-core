@@ -734,7 +734,8 @@ struct Player::Impl {
         if (t->boundary)
             return;
         // A queued successor is only gapless when its PCM rate is unchanged.
-        if (audible && audible->format.rate != t->format.rate)
+        const auto previous = boundaries.empty() ? audible : boundaries.back();
+        if (previous && previous->format.rate != t->format.rate)
             t->gapless = false;
         t->first = submitted;
         t->boundary = true;
