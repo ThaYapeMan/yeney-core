@@ -320,6 +320,20 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(paused['elapsed'], 0)
             self.assertEqual(s.lms.timer()['elapsed'], 0)
 
+    def test_staged_rate_change_has_no_gapless_floor(self):
+        with Session(mode='staged') as s:
+            body, _ = pcm(seconds=.5)
+            s.lms.strm('s', s.source(body))
+            s.lms.wait('STMs')
+            s.lms.wait('STMd')
+            successor, _ = pcm(48000, 24, .5)
+            s.lms.strm('s', s.source(successor), rate=48000, bits=24)
+            boundary = s.lms.wait('STMs')
+            self.assertEqual(boundary['elapsed'], 0)
+            self.assertEqual(s.lms.timer()['elapsed'], 0)
+            self.assertEqual([v for v in s.events() if v.startswith('boundary')][-1],
+                             'boundary 22050 48000 24 2 0')
+
     def test_command_observer(self):
         from unittest.mock import patch
         with patch.dict(os.environ, {'YENEY_TEST_OBSERVER': '1'}), Session() as s:
@@ -420,7 +434,7 @@ class ProtocolTests(unittest.TestCase):
                 self.assertLess(done['time'], starts[1]['time'])
                 self.assertEqual(s.data(), expected + expected2)
                 boundaries = [v for v in s.events() if v.startswith('boundary')]
-                self.assertEqual(boundaries, ['boundary 0 44100 16 2 0', f'boundary 22050 {second_rate} 24 2 1'])
+                self.assertEqual(boundaries, ['boundary 0 44100 16 2 0', f'boundary 22050 {second_rate} 24 2 {int(second_rate == 44100)}'])
 
     def test_04_timed_pause_and_future_start(self):
         with Session() as s:

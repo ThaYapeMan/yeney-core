@@ -733,6 +733,9 @@ struct Player::Impl {
     void boundary(const std::shared_ptr<Track> &t) {
         if (t->boundary)
             return;
+        // A queued successor is only gapless when its PCM rate is unchanged.
+        if (audible && audible->format.rate != t->format.rate)
+            t->gapless = false;
         t->first = submitted;
         t->boundary = true;
         sink.trackBoundary(submitted, t->format, t->gapless);
