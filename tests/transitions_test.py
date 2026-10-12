@@ -41,6 +41,33 @@ class TransitionTests(unittest.TestCase):
             self.assertLess(starts[0]['elapsed'], 30)
             return data, source
 
+    def test_processing_provenance_unity_gain_and_envelopes(self):
+        for gain in (0, 65536, 32768):
+            with self.subTest(gain=gain), Session() as s:
+                body, _ = signal(1200)
+                s.lms.strm('s', s.source(body), rate=RATE, bits=32, gain=gain)
+                s.lms.wait('STMu')
+                expected = 'processed 1' if gain == 32768 else 'processed 0'
+                self.assertIn(expected, s.events())
+                self.assertNotIn('processed ' + str(int(gain != 32768)), s.events())
+        with Session() as s:
+            body, _ = signal(12000)
+            s.lms.strm('s', s.source(body), rate=RATE, bits=32, transition=2, period=1)
+            s.lms.wait('STMu')
+            self.assertIn('processed 1', s.events())
+            self.assertIn('processed 0', s.events())
+
+        with Session() as s:
+            for _ in range(2):
+                body, _ = signal(12000)
+                s.lms.strm('s', s.source(body), rate=RATE, bits=32,
+                           transition=1, period=1, autostart=0)
+                s.lms.wait('STMd')
+            s.lms.strm('u')
+            s.lms.wait('STMu')
+            self.assertEqual([line for line in s.events() if line.startswith('processed ')],
+                             ['processed 0', 'processed 1', 'processed 0'])
+
     def test_01_replay_gain_saturation_and_exact_boundary(self):
         for gain in [0, 65536, 26112, 32768, 131072, 0xffffffff]:
             body, source = signal(1200, 2000000001, -2000000003)

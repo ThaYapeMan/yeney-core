@@ -849,11 +849,14 @@ struct Player::Impl {
                      t->output.size() > crossWindow(*output[1]))
                 count = std::min<uint64_t>(count, t->output.size() - crossWindow(*output[1]));
             Frame frames[256];
+            bool processed = bool(overlap.old) || (t->replayGain && t->replayGain != 65536);
             for (size_t i = 0; i < count; ++i) {
+                const auto gain = envelope(*t, t->played + i);
+                processed = processed || gain != 65536;
                 frames[i] = overlap.old
                                 ? crossFrame(t->output[i], overlap.next->output[i], t->replayGain,
                                              overlap.next->replayGain, overlap.position + i, overlap.length)
-                                : processFrame(t->output[i], t->replayGain, envelope(*t, t->played + i));
+                                : processFrame(t->output[i], t->replayGain, gain);
             }
             if (sink.paced()) {
                 timespec stamp{};
@@ -861,7 +864,7 @@ struct Player::Impl {
                 const uint64_t ns = uint64_t(stamp.tv_sec) * 1000000000 + stamp.tv_nsec;
                 sink.playTiming(submitted, scheduledPlayNs(now, ns, credit), t->format.rate * 1000);
             }
-            size_t accepted = sink.write(frames, count);
+            size_t accepted = sink.write(frames, count, processed);
             if (accepted > count)
                 throw std::runtime_error("sink accepted more frames than offered");
             for (size_t i = 0; i < accepted; ++i)

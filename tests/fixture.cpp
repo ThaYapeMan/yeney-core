@@ -19,6 +19,7 @@ class RecordingSink : public yeney::Sink {
     uint64_t frames_ = 0;
     std::string mode_;
     unsigned rate_ = 48000;
+    int processed_ = -1;
     uint64_t pendingBoundary_ = 0;
     using Clock = std::chrono::steady_clock;
     struct Delivery {
@@ -43,6 +44,13 @@ public:
             blockedUntil_ = Clock::now() + std::chrono::milliseconds(120);
         events_ << "boundary " << frame << ' ' << f.rate << ' ' << f.bits << ' ' << f.channels << ' '
                 << gapless << std::endl;
+    }
+    size_t write(const yeney::Frame *p, size_t n, bool processed) override {
+        if (processed_ != int(processed)) {
+            events_ << "processed " << processed << std::endl;
+            processed_ = processed;
+        }
+        return write(p, n);
     }
     size_t write(const yeney::Frame *p, size_t n) override {
         // Exercise repeated partial acceptance on every write.

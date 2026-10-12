@@ -27,6 +27,13 @@ public:
     virtual uint32_t maxSampleRate() const { return 48000; }
     virtual void trackBoundary(uint64_t frame, const Format &, bool gaplessCandidate) = 0;
     virtual size_t write(const Frame *, size_t frames) = 0;
+    // Authoritative per-block DSP provenance. true means gain/envelope/mixing
+    // (or a future converter) was applied; normalization alone is lossless.
+    // Existing sinks need not use provenance and retain their write callback.
+    virtual size_t write(const Frame *pcm, size_t frames, bool processed) {
+        (void)processed;
+        return write(pcm, frames);
+    }
     // Optional paced-play schedule; firstFrame is the cumulative sink coordinate.
     virtual void playTiming(uint64_t, uint64_t, uint32_t) {}
     virtual void syncPause(uint64_t) { pause(); }
