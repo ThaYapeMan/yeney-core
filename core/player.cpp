@@ -114,7 +114,7 @@ struct Player::Impl {
         int autostart = 1;
         bool known = false, headerPcm = false, wave = false, ready = false, eof = false, decoded = false,
              boundary = false, gapless = false;
-        uint64_t first = 0, end = 0, skipped = 0, played = 0, produced = 0;
+        uint64_t first = 0, end = UINT64_MAX, skipped = 0, played = 0, produced = 0;
         uint32_t replayGain = 0;
         unsigned transition = 0, period = 0;
         uint64_t window = 0, outStart = 0, outLength = 0;
@@ -158,9 +158,8 @@ struct Player::Impl {
     uint32_t elapsed() const {
         if (!audible)
             return 0;
-        auto frames = sink.audibleFrames();
-        return uint32_t((frames >= audible->first ? frames - audible->first + audible->skipped : 0) * 1000 /
-                        audible->format.rate);
+        return trackElapsedMs(sink.audibleFrames(), audible->first, audible->end, audible->skipped,
+                              audible->format.rate);
     }
     void stat(const std::string &event, uint32_t stamp = 0) {
         Status s;
@@ -742,7 +741,7 @@ struct Player::Impl {
         sink.trackBoundary(submitted, t->format, t->gapless);
         boundaries.push_back(t);
         log("boundary frame=" + std::to_string(submitted) + " rate=" + std::to_string(t->format.rate) +
-            " gapless=" + std::to_string(t->gapless));
+            " gapless=" + std::to_string(t->gapless) + " jiffies=" + std::to_string(jiffies()));
     }
     uint32_t envelope(const Track &t, uint64_t frame) const {
         if (t.outLength && frame >= t.outStart)

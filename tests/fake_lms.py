@@ -320,6 +320,34 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(paused['elapsed'], 0)
             self.assertEqual(s.lms.timer()['elapsed'], 0)
 
+    def test_same_rate_gapless_end_cap_preserves_sentinel(self):
+        with Session(mode='staged') as s:
+            first, _ = pcm(48000, 16, .1)
+            s.lms.strm('s', s.source(first), rate=48000)
+            self.assertEqual(s.lms.wait('STMs')['elapsed'], 0)
+            s.lms.wait('STMd')
+            second, _ = pcm(48000, 16, .3)
+            s.lms.strm('s', s.source(second), rate=48000)
+            self.assertEqual(s.lms.wait('STMs')['elapsed'], 1)
+            self.assertEqual(s.lms.timer()['elapsed'], 1)
+            self.assertEqual(s.lms.wait('STMu')['elapsed'], 300)
+            self.assertEqual([e for e in s.events() if e.startswith('boundary')][-1],
+                             'boundary 4800 48000 16 2 1')
+
+    def test_pending_successor_cannot_overrun_old_elapsed(self):
+        with Session(mode='overrun') as s:
+            body, _ = pcm(48000, 16, .5)
+            s.lms.strm('s', s.source(body), rate=48000)
+            s.lms.wait('STMs')
+            s.lms.wait('STMd')
+            successor, _ = pcm(44100, 16, .5)
+            s.lms.strm('s', s.source(successor), rate=44100)
+            s.lms.wait('STMd')
+            for _ in range(3):
+                self.assertEqual(s.lms.timer()['elapsed'], 500)
+            start = s.lms.wait('STMs')
+            self.assertEqual(start['elapsed'], 500)
+
     def test_staged_rate_change_has_no_gapless_floor(self):
         with Session(mode='staged') as s:
             body, _ = pcm(seconds=.5)

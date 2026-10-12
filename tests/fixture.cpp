@@ -19,6 +19,7 @@ class RecordingSink : public yeney::Sink {
     uint64_t frames_ = 0;
     std::string mode_;
     unsigned rate_ = 48000;
+    uint64_t pendingBoundary_ = 0;
     using Clock = std::chrono::steady_clock;
     struct Delivery {
         Clock::time_point at;
@@ -34,6 +35,10 @@ public:
         : pcm_(path + ".pcm", std::ios::binary), events_(path + ".events"), mode_(std::move(mode)) {}
     void trackBoundary(uint64_t frame, const yeney::Format &f, bool gapless) override {
         rate_ = f.rate;
+        if (mode_ == "overrun" && frame) {
+            pendingBoundary_ = frame;
+            blockedUntil_ = Clock::now() + std::chrono::milliseconds(350);
+        }
         if (mode_ == "blocked")
             blockedUntil_ = Clock::now() + std::chrono::milliseconds(120);
         events_ << "boundary " << frame << ' ' << f.rate << ' ' << f.bits << ' ' << f.channels << ' '
@@ -93,8 +98,10 @@ public:
     }
     void volume(uint32_t l, uint32_t r) override { events_ << "volume " << l << ' ' << r << std::endl; }
     void power(bool on) override { events_ << "power " << on << std::endl; }
-    uint64_t startedFrames() const override { return frames_; }
-    bool paced() const override { return mode_ != "delayed" && mode_ != "staged"; }
+    uint64_t startedFrames() const override {
+        return mode_ == "overrun" && Clock::now() < blockedUntil_ ? pendingBoundary_ : frames_;
+    }
+    bool paced() const override { return mode_ != "delayed" && mode_ != "staged" && mode_ != "overrun"; }
 };
 int main(int argc, char **argv) {
     if (argc != 4 && argc != 5)
@@ -118,7 +125,8 @@ int main(int argc, char **argv) {
                 std::cout << "factory " << c.codec << std::endl;
                 return yeney::makeDecoder(c);
             };
-        cfg.startOnSubmit = argc == 5 && std::string(argv[4]) == "staged";
+        cfg.startOnSubmit =
+            argc == 5 && (std::string(argv[4]) == "staged" || std::string(argv[4]) == "overrun");
         RecordingSink sink(argv[3], argc == 5 ? argv[4] : "normal");
         std::signal(SIGINT, signalStop);
         std::signal(SIGTERM, signalStop);

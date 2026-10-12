@@ -14,6 +14,11 @@ template <class T> T get(const uint8_t *p) {
     return v;
 }
 int main() {
+    assert(trackElapsedMs(28371728 + 44100, 0, 28371728, 0, 48000) == 591077);
+    assert(trackElapsedMs(28371728 + 44100, 28371728, UINT64_MAX, 0, 44100) == 1000);
+    assert(trackElapsedMs(100, 200, 400, 0, 48000) == 0);
+    assert(trackElapsedMs(48000, 0, 48000, 24000, 48000) == 1500);
+
     // Sixty seconds, jittered export latency, sub-frame credit, and tick wrap.
     for (unsigned rate : {44100u, 48000u, 192000u}) {
         uint64_t frames = 0, start = uint64_t(UINT32_MAX - 30000) * 1000000;
