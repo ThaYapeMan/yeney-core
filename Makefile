@@ -64,6 +64,7 @@ test: format-check clock-unit shm-unit all unit-test test-player decoder-test de
 	python3 tests/device_script_test.py
 	python3 tests/shm_test.py
 	python3 tests/transitions_test.py
+	python3 tests/queue_test.py
 
 clean:
 	rm -f $(CORE_OBJS) $(APP_OBJS) $(TEST_OBJS) $(CORE_OBJS:.o=.d) $(APP_OBJS:.o=.d) $(TEST_OBJS:.o=.d) libyeneycore.a yeney-player clock-unit unit-test test-player decoder-test demux-sanitized shm-unit decoder-benchmark decoder-benchmark.d

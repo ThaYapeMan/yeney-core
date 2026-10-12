@@ -205,7 +205,13 @@ class DecoderTests(unittest.TestCase):
         pcm = output.read_bytes()
         if expected is not None:
             self.assertEqual(pcm, expected)
-        return pcm, result.stdout.decode()
+        text = result.stdout.decode()
+        exact = re.search(r'^EXACT (\S+)', text, re.M).group(1)
+        if codec == 'l' or (codec == 'f' and data.startswith(b'fLaC') and exact != 'unknown'):
+            self.assertEqual(int(exact), len(pcm)//8)
+        if codec == 'm' or (codec == 'f' and not data.startswith(b'fLaC')):
+            self.assertEqual(exact, 'unknown')
+        return pcm, text
 
     def demux(self, data, error=None, cap=None, seed=42):
         file = self.dir / 'container.bin'

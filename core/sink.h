@@ -7,6 +7,8 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <string>
 
 namespace yeney {
 struct Format {
@@ -17,6 +19,19 @@ struct Format {
 struct Frame {
     int32_t left, right;
 };
+struct TrackDescriptor {
+    uint64_t occurrence = 0;
+    uint32_t rate = 0;
+    std::optional<uint64_t> sourceFrames;
+    unsigned transition = 0, period = 0;
+};
+struct ItemBoundary {
+    uint64_t occurrence = 0, next = 0, frame = 0, overlap = 0;
+    std::string reason;
+};
+struct AudibleStart {
+    uint64_t occurrence = 0, frame = 0;
+};
 // All calls occur on the player's event-loop thread. Positions are cumulative
 // stereo frames, including across format changes. stop/flush must not rewind them.
 // flush discards in-flight output; callbacks must return promptly. Format describes
@@ -24,6 +39,12 @@ struct Frame {
 class Sink {
 public:
     virtual ~Sink() = default;
+    // Queue-only capability. HTTP reads and decode progress never imply audible start.
+    virtual bool decodeAhead() const { return false; }
+    virtual void trackDescriptor(const TrackDescriptor &) {}
+    virtual void resolvedItemBoundary(const ItemBoundary &) {}
+    virtual void coreEvent(const std::string &, uint64_t, uint64_t) {}
+    virtual bool takeAudibleStart(AudibleStart &) { return false; }
     virtual uint32_t maxSampleRate() const { return 48000; }
     virtual void trackBoundary(uint64_t frame, const Format &, bool gaplessCandidate) = 0;
     virtual size_t write(const Frame *, size_t frames) = 0;

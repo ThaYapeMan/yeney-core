@@ -107,6 +107,9 @@ struct Player::Impl {
     Ring<uint8_t> input;
     struct Track {
         Format format;
+        TrackDescriptor descriptor;
+        bool described = false, itemEnded = false;
+        uint32_t decodedAt = 0;
         std::unique_ptr<Decoder> decoder;
         bool decoderFinished = false;
         std::deque<Frame> output;
@@ -125,7 +128,29 @@ struct Player::Impl {
         uint64_t length = 0, position = 0;
     } overlap;
     size_t reservedWindow = 0;
-    size_t outputCapacity() const { return cfg.outputFrames + reservedWindow * 2; }
+    size_t outputCapacity() const {
+        if (sink.decodeAhead())
+            return size_t(cfg.futurePcmSeconds * sink.maxSampleRate());
+        return cfg.outputFrames + reservedWindow * 2;
+    }
+    double queuedSeconds() const {
+        double seconds = 0;
+        for (const auto &t : output)
+            seconds += double(t->output.size()) / t->format.rate;
+        return seconds;
+    }
+    uint64_t occurrence = 0;
+    std::shared_ptr<Track> lastItem;
+    std::string transitionReason = "gapless";
+    uint64_t transitionOverlap = 0;
+    void itemEnd(const std::shared_ptr<Track> &t, uint64_t next, uint64_t overlapFrames,
+                 const std::string &reason) {
+        if (!sink.decodeAhead() || !t || t->itemEnded)
+            return;
+        t->itemEnded = true;
+        t->end = submitted;
+        sink.resolvedItemBoundary({t->descriptor.occurrence, next, submitted, overlapFrames, reason});
+    }
     std::deque<std::shared_ptr<Track>> output, boundaries;
     std::shared_ptr<Track> fetching, audible;
     size_t queued = 0;
@@ -144,6 +169,8 @@ struct Player::Impl {
             cfg.outputFrames > UINT32_MAX / 8 - Decoder::outputCapacity ||
             cfg.transitionMaxFrames > (UINT32_MAX / 8 - cfg.outputFrames - Decoder::outputCapacity) / 2)
             throw std::invalid_argument("buffer size outside supported range");
+        if (!std::isfinite(cfg.futurePcmSeconds) || cfg.futurePcmSeconds < 1 || cfg.futurePcmSeconds > 600)
+            throw std::invalid_argument("invalid future PCM seconds");
         submitted = sink.audibleFrames();
     }
     void log(const std::string &s) {
@@ -198,6 +225,7 @@ struct Player::Impl {
         overlap = {};
         reservedWindow = 0;
         boundaries.clear();
+        lastItem.reset();
         queued = 0;
         skip = 0;
         credit = 0;
@@ -523,6 +551,9 @@ struct Player::Impl {
         stat("STMf");
         fetching = std::make_shared<Track>();
         auto &t = *fetching;
+        t.descriptor.occurrence = ++occurrence;
+        if (sink.decodeAhead())
+            sink.coreEvent("strm", occurrence, submitted);
         t.gapless = gapless;
         t.autostart = b[5] - '0';
         t.threshold = std::min(size_t(b[11]) * 1024, input.capacity());
@@ -530,6 +561,8 @@ struct Player::Impl {
         t.replayGain = be32(b.data() + 18);
         t.transition = b[14] - '0';
         t.period = b[13];
+        t.descriptor.transition = t.transition;
+        t.descriptor.period = t.period;
         ended = false;
         underrun = false;
         output.push_back(fetching);
@@ -690,8 +723,21 @@ struct Player::Impl {
                 t.window = std::min<uint64_t>(frames, cfg.transitionMaxFrames);
                 reservedWindow = std::max(reservedWindow, size_t(t.window));
             }
+            if (sink.decodeAhead()) {
+                const auto exact = t.decoder->exactFrames();
+                if (!t.described || t.descriptor.sourceFrames != exact) {
+                    t.descriptor.rate = t.format.rate;
+                    t.descriptor.sourceFrames = exact;
+                    sink.trackDescriptor(t.descriptor);
+                    t.described = true;
+                }
+            }
             Frame frames[1024];
-            size_t count = t.decoder->take(frames, std::min(size_t(1024), outputCapacity() - queued));
+            size_t room = outputCapacity() - queued;
+            if (sink.decodeAhead())
+                room = std::min(
+                    room, size_t(std::max(0.0, cfg.futurePcmSeconds - queuedSeconds()) * t.format.rate));
+            size_t count = t.decoder->take(frames, std::min(size_t(1024), room));
             t.produced += count;
             t.output.insert(t.output.end(), frames, frames + count);
             queued += count;
@@ -711,17 +757,39 @@ struct Player::Impl {
             }
             if (complete) {
                 t.decoded = true;
+                t.decodedAt = jiffies();
+                if (sink.decodeAhead())
+                    sink.coreEvent("decode-complete", t.descriptor.occurrence, t.produced);
                 if (t.transition == 3 || t.transition == 4) {
                     t.outLength = std::min<uint64_t>(t.window, t.output.size());
                     t.outStart = t.played + t.output.size() - t.outLength;
                 }
                 stat("STMd");
+                if (sink.decodeAhead())
+                    sink.coreEvent("STMd", t.descriptor.occurrence, t.produced);
             }
         } catch (const std::exception &e) {
             failStream(e.what());
         }
     }
     void audibleEvents() {
+        if (sink.decodeAhead()) {
+            AudibleStart signal;
+            while (sink.takeAudibleStart(signal)) {
+                auto it = std::find_if(boundaries.begin(), boundaries.end(), [&](const auto &t) {
+                    return t->descriptor.occurrence == signal.occurrence;
+                });
+                if (it == boundaries.end() || (*it)->first != signal.frame) {
+                    log("queue audible signal rejected");
+                    continue;
+                }
+                audible = *it;
+                boundaries.erase(boundaries.begin(), std::next(it));
+                stat("STMs");
+                sink.coreEvent("STMs", signal.occurrence, signal.frame);
+            }
+            return;
+        }
         uint64_t position = cfg.startOnSubmit ? sink.startedFrames() : sink.audibleFrames();
         while (!boundaries.empty() && position > boundaries.front()->first) {
             audible = boundaries.front();
@@ -736,6 +804,12 @@ struct Player::Impl {
         const auto previous = boundaries.empty() ? audible : boundaries.back();
         if (previous && previous->format.rate != t->format.rate)
             t->gapless = false;
+        if (sink.decodeAhead()) {
+            itemEnd(lastItem, t->descriptor.occurrence, transitionOverlap, transitionReason);
+            lastItem = t;
+            transitionOverlap = 0;
+            transitionReason = "gapless";
+        }
         t->first = submitted;
         t->boundary = true;
         sink.trackBoundary(submitted, t->format, t->gapless);
@@ -763,7 +837,14 @@ struct Player::Impl {
             return true;
         if (next->crossChecked)
             return true;
-        if (next->transition != 1 || !next->window || old->format.rate != next->format.rate) {
+        bool smart = sink.decodeAhead() && cfg.smartSameAlbum &&
+                     cfg.smartSameAlbum(old->descriptor.occurrence, next->descriptor.occurrence);
+        if (next->transition != 1 || !next->window || old->format.rate != next->format.rate || smart) {
+            if (sink.decodeAhead())
+                transitionReason = smart                                   ? "smart-same-album"
+                                   : next->transition == 0                 ? "transition-type-0"
+                                   : old->format.rate != next->format.rate ? "different-rates"
+                                                                           : "envelope-only";
             next->crossChecked = true;
             if (next->transition == 1 && old->format.rate != next->format.rate)
                 log("crossfade disabled: sample rates differ");
@@ -776,12 +857,16 @@ struct Player::Impl {
         if (next->output.size() < length && !next->decoded) {
             next->crossChecked = true;
             log("crossfade disabled: insufficient incoming PCM");
+            if (sink.decodeAhead())
+                transitionReason = "insufficient-incoming-pcm";
             return true;
         }
         length = std::min<uint64_t>(length, next->output.size());
         next->crossChecked = true;
         if (length) {
             overlap = {old, next, length, 0};
+            transitionOverlap = length;
+            transitionReason = "crossfade";
             boundary(next);
             log("crossfade start frame=" + std::to_string(submitted) + " length=" + std::to_string(length) +
                 " rate=" + std::to_string(next->format.rate));
@@ -809,7 +894,16 @@ struct Player::Impl {
             auto t = output.front();
             if (t->output.empty()) {
                 if (t->decoded) {
-                    t->end = submitted;
+                    if (sink.decodeAhead() && output.size() == 1 &&
+                        !due(now, t->decodedAt + cfg.queueStartupMs))
+                        break;
+                    if (!t->itemEnded)
+                        t->end = submitted;
+                    if (sink.decodeAhead()) {
+                        sink.coreEvent("decoder-track-end", t->descriptor.occurrence, submitted);
+                        if (output.size() == 1)
+                            itemEnd(t, 0, 0, "end-of-input");
+                    }
                     output.pop_front();
                     continue;
                 }
@@ -832,6 +926,14 @@ struct Player::Impl {
                 count = std::min(count, size_t(std::max(0.0, std::floor(credit * t->format.rate))));
             if (!count)
                 break;
+            if (sink.decodeAhead() && output.size() == 1 &&
+                (!t->decoded || !due(now, t->decodedAt + cfg.queueStartupMs))) {
+                const uint64_t hold = std::min<uint64_t>(cfg.transitionMaxFrames,
+                                                         uint64_t(cfg.futurePcmSeconds * t->format.rate / 2));
+                if (t->output.size() <= hold)
+                    break;
+                count = std::min<uint64_t>(count, t->output.size() - hold);
+            }
             if (!t->decoded && (t->transition == 1 || t->transition == 3 || t->transition == 4)) {
                 if (t->output.size() <= t->window)
                     break;

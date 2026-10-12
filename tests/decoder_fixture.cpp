@@ -63,6 +63,8 @@ int main(int argc, char **argv) {
             if (!n)
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
         }
+        auto exact = decoder->exactFrames();
+        std::cout << "EXACT " << (exact ? std::to_string(*exact) : "unknown") << '\n';
         std::cout << "FRAMES " << frames << '\n';
         return 0;
     } catch (const std::exception &e) {

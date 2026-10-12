@@ -7,6 +7,7 @@
 #pragma once
 #include "protocol.h"
 #include <memory>
+#include <optional>
 #include <string>
 namespace yeney {
 struct DecoderConfig {
@@ -25,6 +26,7 @@ public:
     virtual void finish() = 0;
     virtual size_t take(Frame *, size_t) = 0;
     virtual bool format(Format &) const = 0;
+    virtual std::optional<uint64_t> exactFrames() const { return std::nullopt; }
     virtual bool done() const = 0;
     virtual std::string error() const = 0;
     virtual size_t inputBuffered() const = 0;

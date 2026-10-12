@@ -30,12 +30,45 @@ class RecordingSink : public yeney::Sink {
     mutable uint64_t audible_ = 0;
     Clock::time_point lastDelivery_{}, blockedUntil_{}, pausedAt_{};
     bool paused_ = false;
+    std::deque<yeney::AudibleStart> starts_;
+    std::deque<uint64_t> described_;
+    uint64_t describedLast_ = 0;
 
 public:
     explicit RecordingSink(const std::string &path, std::string mode)
         : pcm_(path + ".pcm", std::ios::binary), events_(path + ".events"), mode_(std::move(mode)) {}
+    bool decodeAhead() const override { return mode_ == "queue"; }
+    void trackDescriptor(const yeney::TrackDescriptor &d) override {
+        if (describedLast_ != d.occurrence) {
+            described_.push_back(d.occurrence);
+            describedLast_ = d.occurrence;
+        }
+        events_ << "descriptor " << d.occurrence << ' ' << d.rate << ' '
+                << (d.sourceFrames ? std::to_string(*d.sourceFrames) : "unknown") << std::endl;
+    }
+    void resolvedItemBoundary(const yeney::ItemBoundary &b) override {
+        events_ << "item-end " << b.occurrence << ' ' << b.next << ' ' << b.frame << ' ' << b.overlap << ' '
+                << b.reason << std::endl;
+    }
+    void coreEvent(const std::string &kind, uint64_t id, uint64_t frame) override {
+        events_ << kind << ' ' << id << ' ' << frame << std::endl;
+        if (kind == "strm")
+            pendingOccurrence_ = id;
+    }
+    uint64_t pendingOccurrence_ = 0;
+    bool takeAudibleStart(yeney::AudibleStart &s) override {
+        if (starts_.empty() || audibleFrames() <= starts_.front().frame)
+            return false;
+        s = starts_.front();
+        starts_.pop_front();
+        return true;
+    }
     void trackBoundary(uint64_t frame, const yeney::Format &f, bool gapless) override {
         rate_ = f.rate;
+        if (decodeAhead()) {
+            starts_.push_back({described_.front(), frame});
+            described_.pop_front();
+        }
         if (mode_ == "overrun" && frame) {
             pendingBoundary_ = frame;
             blockedUntil_ = Clock::now() + std::chrono::milliseconds(350);
@@ -62,9 +95,10 @@ public:
                 for (unsigned j = 0; j < 4; ++j)
                     pcm_.put(v >> (j * 8));
         frames_ += n;
-        if (mode_ == "delayed" || mode_ == "staged") {
+        if (mode_ == "delayed" || mode_ == "staged" || mode_ == "queue") {
             if (delivery_.empty())
-                lastDelivery_ = std::max(lastDelivery_, Clock::now() + std::chrono::milliseconds(60));
+                lastDelivery_ = std::max(
+                    lastDelivery_, Clock::now() + std::chrono::milliseconds(mode_ == "queue" ? 600 : 60));
             lastDelivery_ +=
                 std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(double(n) / rate_));
             delivery_.push_back({lastDelivery_, frames_});
@@ -95,7 +129,7 @@ public:
         events_ << "flush" << std::endl;
     }
     uint64_t audibleFrames() const override {
-        if (mode_ != "delayed" && mode_ != "staged")
+        if (mode_ != "delayed" && mode_ != "staged" && mode_ != "queue")
             return audible_ = frames_;
         auto now = paused_ ? pausedAt_ : Clock::now();
         while (!delivery_.empty() && delivery_.front().at <= now) {
@@ -109,7 +143,10 @@ public:
     uint64_t startedFrames() const override {
         return mode_ == "overrun" && Clock::now() < blockedUntil_ ? pendingBoundary_ : frames_;
     }
-    bool paced() const override { return mode_ != "delayed" && mode_ != "staged" && mode_ != "overrun"; }
+    bool paced() const override {
+        return mode_ != "delayed" && mode_ != "staged" && mode_ != "queue" && mode_ != "overrun" &&
+               mode_ != "queue";
+    }
 };
 int main(int argc, char **argv) {
     if (argc != 4 && argc != 5)
@@ -122,6 +159,9 @@ int main(int argc, char **argv) {
         cfg.port = std::stoul(argv[2]);
         cfg.discoveryAddress = "127.0.0.1";
         cfg.streamBytes = 32768;
+        cfg.queueStartupMs = 300;
+        if (std::getenv("YENEY_TEST_SMART"))
+            cfg.smartSameAlbum = [](uint64_t, uint64_t) { return true; };
         cfg.outputFrames = 96000;
         cfg.log = [](const std::string &s) { std::cout << s << std::endl; };
         if (std::getenv("YENEY_TEST_OBSERVER"))

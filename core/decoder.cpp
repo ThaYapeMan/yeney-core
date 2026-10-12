@@ -34,6 +34,7 @@ class Worker : public Decoder {
     std::thread thread_;
     bool eof_ = false, cancel_ = false, done_ = false, haveFormat_ = false;
     Format format_;
+    std::optional<uint64_t> exactFrames_;
     std::string error_;
 
 protected:
@@ -98,6 +99,10 @@ protected:
         format_ = f;
         haveFormat_ = true;
     }
+    void setExactFrames(uint64_t n) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        exactFrames_ = n;
+    }
     void emit(Frame f) {
         std::unique_lock<std::mutex> lock(mutex_);
         cv_.wait(lock, [&] { return cancel_ || frames_.free(); });
@@ -131,6 +136,10 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         f = format_;
         return haveFormat_;
+    }
+    std::optional<uint64_t> exactFrames() const override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return exactFrames_;
     }
     bool done() const override {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -258,12 +267,16 @@ bool PcmWorker::containerHeader(Track &t) {
     };
     size_t pos = 12;
     bool found = false;
+    std::optional<uint64_t> aiffFrames;
     Format f;
     while (input.size() >= pos + 8) {
         uint32_t length = number(pos + 4, 4);
         if (wave && tag(pos, "data")) {
             if (!found)
                 throw std::invalid_argument("WAV data before fmt");
+            const unsigned width = f.channels * f.bits / 8;
+            if (length != UINT32_MAX && length != 0x7fffffff && length % width == 0)
+                setExactFrames(length / width);
             input.discard(pos + 8);
             t.format = f;
             t.known = true;
@@ -283,6 +296,8 @@ bool PcmWorker::containerHeader(Track &t) {
                 throw std::invalid_argument("AIFF sound offset too large");
             if (input.size() < pos + 16 + offset)
                 break;
+            if (aiffFrames && *aiffFrames * (f.channels * f.bits / 8) == length - 8 - offset)
+                setExactFrames(*aiffFrames);
             input.discard(pos + 16 + offset);
             t.format = f;
             t.known = true;
@@ -309,6 +324,7 @@ bool PcmWorker::containerHeader(Track &t) {
             if (length < 18)
                 throw std::invalid_argument("short AIFF common chunk");
             f.channels = number(pos + 8, 2);
+            aiffFrames = number(pos + 10, 4);
             f.bits = number(pos + 14, 2);
             f.bigEndian = true;
             uint16_t exponent = number(pos + 16, 2);
@@ -367,6 +383,10 @@ class FlacWorker : public Worker {
         }
         return FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
     }
+    static void metadataCb(const FLAC__StreamDecoder *, const FLAC__StreamMetadata *m, void *self) {
+        if (m->type == FLAC__METADATA_TYPE_STREAMINFO && m->data.stream_info.total_samples)
+            static_cast<FlacWorker *>(self)->setExactFrames(m->data.stream_info.total_samples);
+    }
     static void errorCb(const FLAC__StreamDecoder *, FLAC__StreamDecoderErrorStatus status, void *self) {
         // Frame-aligned LMS seeks can omit STREAMINFO. Initial sync scanning is
         // allowed, but CRC/header errors or sync loss after audio are failures.
@@ -382,7 +402,8 @@ class FlacWorker : public Worker {
             decoder, FLAC__stream_decoder_delete);
         FLAC__stream_decoder_set_md5_checking(decoder, false);
         if (FLAC__stream_decoder_init_stream(decoder, readCb, nullptr, nullptr, nullptr, nullptr, writeCb,
-                                             nullptr, errorCb, this) != FLAC__STREAM_DECODER_INIT_STATUS_OK)
+                                             metadataCb, errorCb,
+                                             this) != FLAC__STREAM_DECODER_INIT_STATUS_OK)
             throw std::runtime_error("libFLAC initialization");
         bool ok = FLAC__stream_decoder_process_until_end_of_stream(decoder);
         FLAC__stream_decoder_finish(decoder);
@@ -532,6 +553,7 @@ class AlacWorker : public Worker {
                 if (info.format.channels > 2)
                     throw std::runtime_error("ALAC: more than 2 channels unsupported");
                 setFormat(info.format);
+                setExactFrames(info.trimEnd - info.trimBegin);
                 if (apple.Init(info.cookie.data(), info.cookie.size()))
                     throw std::runtime_error("ALAC cookie initialization failed");
                 output.resize(size_t(info.framesPerPacket) * info.format.channels * 4);
