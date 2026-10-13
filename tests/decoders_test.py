@@ -237,6 +237,17 @@ class DecoderTests(unittest.TestCase):
                 reference = zlib.decompress(file.with_suffix('.reference.zlib').read_bytes())
                 self.decode('f', file.read_bytes(), reference)
                 self.decode('f', file.read_bytes()[entry['seekOffset']:], reference[entry['seekFrames'] * 8:])
+                original=file.read_bytes()
+                pos=4
+                while True:
+                    last=bool(original[pos]&128)
+                    size=int.from_bytes(original[pos+1:pos+4],'big')
+                    pos+=4+size
+                    if last: break
+                # STREAMINFO retained with a frame-aligned seek: remaining count
+                # comes from the first FLAC frame's source coordinate.
+                self.decode('f', original[:pos]+original[entry['seekOffset']:], reference[entry['seekFrames']*8:])
+
             return
         for bits, channels in [(16, 2), (24, 2), (16, 1)]:
             with self.subTest(bits=bits, channels=channels):

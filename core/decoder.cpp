@@ -354,6 +354,8 @@ bool PcmWorker::containerHeader(Track &t) {
 class FlacWorker : public Worker {
     std::string callbackError;
     bool hadFrame = false;
+    uint64_t sourceTotal = 0;
+    unsigned sourceBlockSize = 0;
     static FLAC__StreamDecoderReadStatus readCb(const FLAC__StreamDecoder *, FLAC__byte *bytes, size_t *n,
                                                 void *self) {
         try {
@@ -371,6 +373,14 @@ class FlacWorker : public Worker {
             Format format{f->header.sample_rate, f->header.bits_per_sample, f->header.channels, false};
             if (format.bits != 16 && format.bits != 24)
                 throw std::runtime_error("FLAC requires 16 or 24 bits");
+            if (!w.hadFrame && w.sourceTotal) {
+                const uint64_t origin = f->header.number_type == FLAC__FRAME_NUMBER_TYPE_SAMPLE_NUMBER
+                                            ? f->header.number.sample_number
+                                            : uint64_t(f->header.number.frame_number) * w.sourceBlockSize;
+                if (origin > w.sourceTotal)
+                    throw std::runtime_error("FLAC seek origin exceeds source count");
+                w.setExactFrames(w.sourceTotal - origin);
+            }
             w.setFormat(format);
             w.hadFrame = true;
             for (unsigned i = 0; i < f->header.blocksize; ++i)
@@ -384,8 +394,11 @@ class FlacWorker : public Worker {
         return FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
     }
     static void metadataCb(const FLAC__StreamDecoder *, const FLAC__StreamMetadata *m, void *self) {
-        if (m->type == FLAC__METADATA_TYPE_STREAMINFO && m->data.stream_info.total_samples)
-            static_cast<FlacWorker *>(self)->setExactFrames(m->data.stream_info.total_samples);
+        if (m->type == FLAC__METADATA_TYPE_STREAMINFO && m->data.stream_info.total_samples) {
+            auto &w = *static_cast<FlacWorker *>(self);
+            w.sourceTotal = m->data.stream_info.total_samples;
+            w.sourceBlockSize = m->data.stream_info.max_blocksize;
+        }
     }
     static void errorCb(const FLAC__StreamDecoder *, FLAC__StreamDecoderErrorStatus status, void *self) {
         // Frame-aligned LMS seeks can omit STREAMINFO. Initial sync scanning is
