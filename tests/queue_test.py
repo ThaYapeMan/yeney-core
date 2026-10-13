@@ -65,7 +65,8 @@ class QueueTests(unittest.TestCase):
         body=b'AIFF'+b'COMM'+struct.pack('>I',len(comm))+comm+b'SSND'+struct.pack('>I',len(ssnd))+ssnd
         aiff=b'FORM'+struct.pack('>I',len(body))+body
         with tempfile.TemporaryDirectory() as d:
-            for codec,data in [('p',buf.getvalue()),('a',aiff)]:
+            for codec,data in [('p',buf.getvalue()),('a',aiff),('p',buf.getvalue()+b'LIST'+struct.pack('<I',3)+b'abc\0'),('a',aiff+b'ANNO'+struct.pack('>I',3)+b'abc\0')]:
+                data=data[:4]+struct.pack('<I' if codec=='p' else '>I',len(data)-8)+data[8:]
                 src=Path(d)/'source'; dst=Path(d)/'pcm'; src.write_bytes(data)
                 p=subprocess.run([str(Path(__file__).resolve().parents[1]/'decoder-test'),codec,str(src),str(dst)],capture_output=True,text=True,check=True)
                 self.assertIn('EXACT 1600',p.stdout); self.assertEqual(len(dst.read_bytes()),n*8)

@@ -162,6 +162,7 @@ class PcmWorker : public Worker {
     Ring<uint8_t> input{32768};
     struct Track {
         Format format;
+        std::optional<uint64_t> frames;
         bool headerPcm = false, known = false, wave = false, eof = false;
     };
     bool containerHeader(Track &t);
@@ -211,8 +212,11 @@ class PcmWorker : public Worker {
             pending.push_back(byte);
         }
         bool end = t.eof;
+        uint64_t position = 0;
         while (true) {
             size_t used = 0;
+            if (cfg.finitePcmContainers && t.frames && position >= *t.frames)
+                used = pending.size();
             while (pending.size() - used >= width) {
                 auto f = decodeFrame(pending.data() + used, t.format);
                 used += width;
@@ -221,9 +225,16 @@ class PcmWorker : public Worker {
                     f.right = int32_t(uint32_t(f.right) ^ 0x80000000u);
                 }
                 emit(f);
+                ++position;
+                if (cfg.finitePcmContainers && t.frames && position == *t.frames) {
+                    used = pending.size();
+                    break;
+                }
             }
             pending.erase(pending.begin(), pending.begin() + used);
             if (end) {
+                if (cfg.finitePcmContainers && t.frames && position != *t.frames)
+                    throw std::runtime_error("truncated PCM container payload");
                 if (!pending.empty())
                     throw std::runtime_error("partial PCM frame at EOF");
                 break;
@@ -276,7 +287,9 @@ bool PcmWorker::containerHeader(Track &t) {
                 throw std::invalid_argument("WAV data before fmt");
             const unsigned width = f.channels * f.bits / 8;
             if (length != UINT32_MAX && length != 0x7fffffff && length % width == 0)
-                setExactFrames(length / width);
+                t.frames = length / width;
+            if (t.frames)
+                setExactFrames(*t.frames);
             input.discard(pos + 8);
             t.format = f;
             t.known = true;
@@ -297,7 +310,9 @@ bool PcmWorker::containerHeader(Track &t) {
             if (input.size() < pos + 16 + offset)
                 break;
             if (aiffFrames && *aiffFrames * (f.channels * f.bits / 8) == length - 8 - offset)
-                setExactFrames(*aiffFrames);
+                t.frames = *aiffFrames;
+            if (t.frames)
+                setExactFrames(*t.frames);
             input.discard(pos + 16 + offset);
             t.format = f;
             t.known = true;

@@ -444,6 +444,7 @@ struct Player::Impl {
             throw std::runtime_error("duplicate codec configuration");
         DecoderConfig c;
         c.codec = p[0];
+        c.finitePcmContainers = sink.decodeAhead();
         c.transcoded = cfg.sourceIsTranscoded && cfg.sourceIsTranscoded(t.descriptor.occurrence);
         c.size = p[1];
         c.rate = p[2];
