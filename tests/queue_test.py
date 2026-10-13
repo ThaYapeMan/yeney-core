@@ -69,7 +69,10 @@ class QueueTests(unittest.TestCase):
                 src=Path(d)/'source'; dst=Path(d)/'pcm'; src.write_bytes(data)
                 p=subprocess.run([str(Path(__file__).resolve().parents[1]/'decoder-test'),codec,str(src),str(dst)],capture_output=True,text=True,check=True)
                 self.assertIn('EXACT 1600',p.stdout); self.assertEqual(len(dst.read_bytes()),n*8)
-        print('PASS exact WAV/AIFF source frame counts match decoded references')
+                with patch.dict(os.environ, {'YENEY_TEST_TRANSCODED':'1'}):
+                    result=subprocess.run([str(Path(__file__).resolve().parents[1]/'decoder-test'),codec,str(src),str(dst)],capture_output=True,text=True,check=True)
+                    self.assertIn('EXACT unknown',result.stdout)
+        print('PASS exact WAV/AIFF source frame counts match decoded references; declared transcoding reports unknown')
 
     def test_decoder_ahead_audible_start(self):
         with Session(mode='queue') as s:

@@ -24,6 +24,7 @@ struct TrackDescriptor {
     uint32_t rate = 0;
     std::optional<uint64_t> sourceFrames;
     unsigned transition = 0, period = 0;
+    uint64_t transitionFrames = 0;
 };
 struct ItemBoundary {
     uint64_t occurrence = 0, next = 0, frame = 0, overlap = 0;

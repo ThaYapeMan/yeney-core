@@ -23,6 +23,7 @@ struct Config {
     std::array<uint8_t, 6> mac{0x02, 0, 0, 0, 0, 1};
     double futurePcmSeconds = 30.0;
     unsigned queueStartupMs = 15000;
+    std::function<bool(uint64_t)> sourceIsTranscoded;
     // Optional host-provided smart rule; strm itself contains no album identity.
     std::function<bool(uint64_t, uint64_t)> smartSameAlbum;
     size_t transitionMaxFrames = 2 * 1024 * 1024; // per-track window cap

@@ -16,6 +16,7 @@ int main(int argc, char **argv) {
     try {
         yeney::DecoderConfig cfg;
         cfg.codec = argv[1][0];
+        cfg.transcoded = std::getenv("YENEY_TEST_TRANSCODED") != nullptr;
         if (argc > 4)
             cfg.earlyMediaCap = std::stoull(argv[4]);
         auto decoder = yeney::makeDecoder(cfg);

@@ -139,7 +139,7 @@ public:
     }
     std::optional<uint64_t> exactFrames() const override {
         std::lock_guard<std::mutex> lock(mutex_);
-        return exactFrames_;
+        return cfg.transcoded ? std::nullopt : exactFrames_;
     }
     bool done() const override {
         std::lock_guard<std::mutex> lock(mutex_);

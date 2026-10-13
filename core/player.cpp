@@ -130,7 +130,7 @@ struct Player::Impl {
     size_t reservedWindow = 0;
     size_t outputCapacity() const {
         if (sink.decodeAhead())
-            return size_t(cfg.futurePcmSeconds * sink.maxSampleRate());
+            return size_t(cfg.futurePcmSeconds * sink.maxSampleRate()) + cfg.transitionMaxFrames * 2;
         return cfg.outputFrames + reservedWindow * 2;
     }
     double queuedSeconds() const {
@@ -138,6 +138,17 @@ struct Player::Impl {
         for (const auto &t : output)
             seconds += double(t->output.size()) / t->format.rate;
         return seconds;
+    }
+    double futureSeconds() const {
+        // Two bounded tail windows are mixer look-behind, not future PCM.
+        double reserve = 0;
+        unsigned count = 0;
+        for (const auto &t : output) {
+            if (++count > 2)
+                break;
+            reserve += double(std::min<uint64_t>(t->output.size(), cfg.transitionMaxFrames)) / t->format.rate;
+        }
+        return std::max(0.0, queuedSeconds() - reserve);
     }
     uint64_t occurrence = 0;
     std::shared_ptr<Track> lastItem;
@@ -291,6 +302,8 @@ struct Player::Impl {
     void failStream(const std::string &why, uint8_t reason = 1) {
         bool connectedStream = http.fd >= 0;
         log("stream error: " + why);
+        if (sink.decodeAhead() && fetching)
+            sink.coreEvent("fault:" + why, fetching->descriptor.occurrence, submitted);
         stopStream();
         if (fetching) {
             fetching->eof = true;
@@ -431,6 +444,7 @@ struct Player::Impl {
             throw std::runtime_error("duplicate codec configuration");
         DecoderConfig c;
         c.codec = p[0];
+        c.transcoded = cfg.sourceIsTranscoded && cfg.sourceIsTranscoded(t.descriptor.occurrence);
         c.size = p[1];
         c.rate = p[2];
         c.channels = p[3];
@@ -726,6 +740,7 @@ struct Player::Impl {
             if (sink.decodeAhead()) {
                 const auto exact = t.decoder->exactFrames();
                 if (!t.described || t.descriptor.sourceFrames != exact) {
+                    t.descriptor.transitionFrames = t.window;
                     t.descriptor.rate = t.format.rate;
                     t.descriptor.sourceFrames = exact;
                     sink.trackDescriptor(t.descriptor);
@@ -736,7 +751,7 @@ struct Player::Impl {
             size_t room = outputCapacity() - queued;
             if (sink.decodeAhead())
                 room = std::min(
-                    room, size_t(std::max(0.0, cfg.futurePcmSeconds - queuedSeconds()) * t.format.rate));
+                    room, size_t(std::max(0.0, cfg.futurePcmSeconds - futureSeconds()) * t.format.rate));
             size_t count = t.decoder->take(frames, std::min(size_t(1024), room));
             t.produced += count;
             t.output.insert(t.output.end(), frames, frames + count);
@@ -928,8 +943,7 @@ struct Player::Impl {
                 break;
             if (sink.decodeAhead() && output.size() == 1 &&
                 (!t->decoded || !due(now, t->decodedAt + cfg.queueStartupMs))) {
-                const uint64_t hold = std::min<uint64_t>(cfg.transitionMaxFrames,
-                                                         uint64_t(cfg.futurePcmSeconds * t->format.rate / 2));
+                const uint64_t hold = cfg.transitionMaxFrames;
                 if (t->output.size() <= hold)
                     break;
                 count = std::min<uint64_t>(count, t->output.size() - hold);

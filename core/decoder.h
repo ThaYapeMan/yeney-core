@@ -12,6 +12,7 @@
 namespace yeney {
 struct DecoderConfig {
     char codec = 'p';
+    bool transcoded = false; // authoritative host/source metadata, never inferred from PCM
     uint8_t size = '1', rate = '4', channels = '2', endian = '1';
     uint32_t maxRate = 48000;
     size_t earlyMediaCap = 256ull * 1024 * 1024;
