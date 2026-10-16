@@ -108,8 +108,9 @@ struct Player::Impl {
     struct Track {
         Format format;
         TrackDescriptor descriptor;
-        bool described = false, itemEnded = false;
-        uint32_t decodedAt = 0;
+        bool described = false, itemEnded = false, startReported = false, doneReported = false,
+             failed = false;
+        uint32_t decodedAt = 0, audibleAt = 0;
         std::unique_ptr<Decoder> decoder;
         bool decoderFinished = false;
         std::deque<Frame> output;
@@ -158,12 +159,14 @@ struct Player::Impl {
                  const std::string &reason) {
         if (!sink.decodeAhead() || !t || t->itemEnded)
             return;
+        log("queue item-end occurrence=" + std::to_string(t->descriptor.occurrence) + " reason=" + reason);
         t->itemEnded = true;
         t->end = submitted;
         sink.resolvedItemBoundary({t->descriptor.occurrence, next, submitted, overlapFrames, reason});
     }
     std::deque<std::shared_ptr<Track>> output, boundaries;
     std::shared_ptr<Track> fetching, audible;
+    std::deque<std::shared_ptr<Track>> faults;
     size_t queued = 0;
     uint64_t received = 0, submitted = 0, skip = 0, bodyReceived = 0;
     uint64_t contentLength = std::numeric_limits<uint64_t>::max();
@@ -236,6 +239,7 @@ struct Player::Impl {
         overlap = {};
         reservedWindow = 0;
         boundaries.clear();
+        faults.clear();
         lastItem.reset();
         queued = 0;
         skip = 0;
@@ -306,11 +310,18 @@ struct Player::Impl {
             sink.coreEvent("fault:" + why, fetching->descriptor.occurrence, submitted);
         stopStream();
         if (fetching) {
+            if (sink.decodeAhead())
+                fetching->failed = true;
             fetching->eof = true;
             fetching->decoded = true;
             fetching->decoder.reset();
         }
-        stat("STMn");
+        if (sink.decodeAhead() && fetching && fetching->produced) {
+            fetching->failed = true;
+            fetching->decodedAt = jiffies();
+            faults.push_back(fetching);
+        } else
+            stat("STMn");
         if (connectedStream)
             send("DSCO", Bytes{reason});
     }
@@ -444,6 +455,7 @@ struct Player::Impl {
             throw std::runtime_error("duplicate codec configuration");
         DecoderConfig c;
         c.codec = p[0];
+        t.descriptor.codec = c.codec;
         c.finitePcmContainers = sink.decodeAhead();
         c.transcoded = cfg.sourceIsTranscoded && cfg.sourceIsTranscoded(t.descriptor.occurrence);
         c.size = p[1];
@@ -463,6 +475,8 @@ struct Player::Impl {
             if (n < 28)
                 throw std::runtime_error("short strm");
             uint32_t value = be32(b.data() + 18);
+            if (sink.decodeAhead())
+                log("queue command strm " + std::string(1, char(b[4])));
             if (cfg.observeCommand)
                 cfg.observeCommand({char(b[4]), value, playing && !paused && submittedSinceFlush});
             switch (b[4]) {
@@ -474,7 +488,11 @@ struct Player::Impl {
                 stat("STMf");
                 break;
             case 'f':
-                flushStreaming();
+                if (sink.decodeAhead()) {
+                    clear(true);
+                    stat("STMf");
+                } else
+                    flushStreaming();
                 break;
             case 'p':
                 if (value)
@@ -578,6 +596,7 @@ struct Player::Impl {
         t.period = b[13];
         t.descriptor.transition = t.transition;
         t.descriptor.period = t.period;
+        t.descriptor.codec = char(b[6]);
         ended = false;
         underrun = false;
         output.push_back(fetching);
@@ -727,10 +746,13 @@ struct Player::Impl {
                 t.decoderFinished = true;
             }
             std::string error = t.decoder->error();
-            if (!error.empty())
+            if (!error.empty() && !sink.decodeAhead())
                 throw std::runtime_error(error);
-            if (!t.decoder->format(t.format))
+            if (!t.decoder->format(t.format)) {
+                if (!error.empty() && t.decoder->done())
+                    throw std::runtime_error(error);
                 return;
+            }
             if (t.transition && t.period) {
                 uint64_t frames = uint64_t(t.format.rate) * t.period;
                 if (t.transition == 4)
@@ -757,8 +779,25 @@ struct Player::Impl {
             t.produced += count;
             t.output.insert(t.output.end(), frames, frames + count);
             queued += count;
+            error = t.decoder->error();
+            if (sink.decodeAhead() && !error.empty() && t.decoder->done()) {
+                const auto exact = t.decoder->exactFrames();
+                if (sink.decodeAhead() && exact && *exact > t.produced &&
+                    *exact - t.produced <= t.format.rate) {
+                    const auto shortfall = *exact - t.produced;
+                    t.output.insert(t.output.end(), shortfall, Frame{});
+                    queued += shortfall;
+                    t.produced += shortfall;
+                    const auto message = "source-short " + std::to_string(shortfall) + " frames";
+                    log(message);
+                    sink.coreEvent("fault:" + message, t.descriptor.occurrence, t.produced);
+                } else
+                    throw std::runtime_error(error);
+            }
             size_t target = std::min(cfg.outputFrames, size_t(t.outputThreshold) * t.format.rate / 10);
             bool complete = t.decoder->done();
+            if (sink.decodeAhead() && complete && !t.produced)
+                throw std::runtime_error("source-empty");
             if (t.autostart == 0 && (t.output.size() >= target || complete)) {
                 stat("STMl");
                 t.autostart = -1;
@@ -780,13 +819,19 @@ struct Player::Impl {
                     t.outLength = std::min<uint64_t>(t.window, t.output.size());
                     t.outStart = t.played + t.output.size() - t.outLength;
                 }
-                stat("STMd");
-                if (sink.decodeAhead())
-                    sink.coreEvent("STMd", t.descriptor.occurrence, t.produced);
+                reportDecoded(t);
             }
         } catch (const std::exception &e) {
             failStream(e.what());
         }
+    }
+    void reportDecoded(Track &t) {
+        if (!t.decoded || t.failed || t.doneReported || (sink.decodeAhead() && !t.startReported))
+            return;
+        t.doneReported = true;
+        stat("STMd");
+        if (sink.decodeAhead())
+            sink.coreEvent("STMd", t.descriptor.occurrence, t.produced);
     }
     void audibleEvents() {
         if (sink.decodeAhead()) {
@@ -795,7 +840,8 @@ struct Player::Impl {
                 auto it = std::find_if(boundaries.begin(), boundaries.end(), [&](const auto &t) {
                     return t->descriptor.occurrence == signal.occurrence;
                 });
-                if (it == boundaries.end() || (*it)->first != signal.frame) {
+                if (it == boundaries.end() || (*it)->first != signal.frame || !(*it)->played ||
+                    signal.frame >= sink.audibleFrames()) {
                     log("queue audible signal rejected");
                     continue;
                 }
@@ -803,6 +849,15 @@ struct Player::Impl {
                 boundaries.erase(boundaries.begin(), std::next(it));
                 stat("STMs");
                 sink.coreEvent("STMs", signal.occurrence, signal.frame);
+                audible->startReported = true;
+                audible->audibleAt = jiffies();
+                reportDecoded(*audible);
+            }
+            while (!faults.empty() && faults.front()->end != UINT64_MAX &&
+                   sink.drained(faults.front()->end)) {
+                stat("STMn");
+                sink.coreEvent("STMn", faults.front()->descriptor.occurrence, faults.front()->end);
+                faults.pop_front();
             }
             return;
         }
@@ -849,6 +904,9 @@ struct Player::Impl {
         if (overlap.old || output.size() < 2 || !old->decoded)
             return true;
         auto next = output[1];
+        if (sink.decodeAhead() && !next->described && old->transition == 1 &&
+            !due(jiffies(), successorDeadline(*old)))
+            return false;
         if (!next->ready || !next->decoder || !next->decoder->format(next->format))
             return true;
         if (next->crossChecked)
@@ -871,6 +929,8 @@ struct Player::Impl {
         if (old->output.size() > window)
             return true;
         if (next->output.size() < length && !next->decoded) {
+            if (sink.decodeAhead() && !due(jiffies(), successorDeadline(*old)))
+                return false;
             next->crossChecked = true;
             log("crossfade disabled: insufficient incoming PCM");
             if (sink.decodeAhead())
@@ -888,6 +948,22 @@ struct Player::Impl {
                 " rate=" + std::to_string(next->format.rate));
         }
         return true;
+    }
+    uint32_t successorDeadline(const Track &t) const {
+        return t.audibleAt + uint32_t(std::max(0.0, double(t.produced) / t.format.rate * 1000 - 100));
+    }
+    bool waitSuccessor(const Track &t) const {
+        if (!sink.decodeAhead() || output.size() != 1 || t.transition != 1 || t.failed)
+            return false;
+        if (!t.decoded)
+            return true;
+        // The held tail must be resolved before its audible deadline. A short
+        // first item keeps one frame to establish STMs before requesting more.
+        const auto position = sink.audibleFrames();
+        const auto end = t.first + t.produced;
+        const auto remaining = end > position ? end - position : 0;
+        return !t.startReported || (remaining > std::max<uint64_t>(1, t.format.rate / 10) &&
+                                    !due(jiffies(), successorDeadline(t)));
     }
     void outputStep(uint32_t now) {
         uint32_t delta = now - lastTick;
@@ -910,15 +986,14 @@ struct Player::Impl {
             auto t = output.front();
             if (t->output.empty()) {
                 if (t->decoded) {
-                    if (sink.decodeAhead() && output.size() == 1 &&
-                        !due(now, t->decodedAt + cfg.queueStartupMs))
+                    if (waitSuccessor(*t))
                         break;
                     if (!t->itemEnded)
                         t->end = submitted;
                     if (sink.decodeAhead()) {
                         sink.coreEvent("decoder-track-end", t->descriptor.occurrence, submitted);
                         if (output.size() == 1)
-                            itemEnd(t, 0, 0, "end-of-input");
+                            itemEnd(t, 0, 0, t->transition == 0 ? "no-transition" : "successor-deadline");
                     }
                     output.pop_front();
                     continue;
@@ -942,9 +1017,8 @@ struct Player::Impl {
                 count = std::min(count, size_t(std::max(0.0, std::floor(credit * t->format.rate))));
             if (!count)
                 break;
-            if (sink.decodeAhead() && output.size() == 1 &&
-                (!t->decoded || !due(now, t->decodedAt + cfg.queueStartupMs))) {
-                const uint64_t hold = cfg.transitionMaxFrames;
+            if (waitSuccessor(*t)) {
+                const uint64_t hold = t->decoded ? std::min(t->window, t->produced - 1) : t->window;
                 if (t->output.size() <= hold)
                     break;
                 count = std::min<uint64_t>(count, t->output.size() - hold);

@@ -260,3 +260,38 @@ player's codec precision without introducing host-specific code into core.
   changed. Device-clock granularity can delay or suppress recognition of a fractional-
   second genuine Sonos underrun; conservative sink evidence avoids interrupting buffered playback.
   These are localhost regression tests, not a claim of a physical-device run.
+
+## Queue capability: 16 October 2026 field corrections
+
+For `Sink::decodeAhead()` only, STMs(N) must precede STMd(N). Decoding and
+future PCM production may finish earlier; completion stays attached to N and
+is reported immediately after its explicit audible start. LMS associates STMs
+with its currently streamed song, rather than a FIFO of completed decoders.
+The fake LMS now models that association and its two-ahead ceiling.
+
+A decoder error is checked again after draining the decoder's output ring.
+Previously checking the error first discarded up to 8,192 valid frames and
+sent STMn while older decoded PCM still awaited playback. Queue faults now
+retain those frames and wait for their audible drain before STMn. Queue flush
+cancels pending audible starts. Empty occurrences cannot announce STMs.
+
+Queue MP4 EOF tolerates a retained longer mdat length in a rewritten seek
+header, and trailing boxes once all selected samples arrived. Exact counts
+remain the sample table's trimmed remaining range. A genuinely short exact
+source is padded by at most one second, explicitly reported as `source-short
+<n> frames`; larger deficits retain the existing item length-fault policy.
+Stream decoder parsing and stream command behavior remain unchanged. The field
+logs have no media bytes: rewritten mdat length is a reproduced failure class,
+not a proven diagnosis of the owner's original payload.
+
+A configured crossfade retains the outgoing window until the successor is
+ready or the audible deadline (100 ms safety margin). A very short first track
+retains one non-overlapped frame so it can announce its start and request its
+successor. Type zero does not hold a speculative transition window; its final
+boundary is `no-transition`. The deadline fallback is `successor-deadline`.
+
+STMr is emitted solely in response to `strm u`, in both capabilities. It is not
+emitted by DSCO. Queue command logging makes that relationship visible. This
+matches the unpause acknowledgement described by the
+[squeezelite protocol implementation](https://github.com/ralph-irving/squeezelite/blob/master/slimproto.c);
+only protocol semantics were consulted, with no source copied or translated.

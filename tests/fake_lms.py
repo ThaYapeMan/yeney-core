@@ -106,6 +106,7 @@ class LMS:
         self.rebuffer_delay = None
         self.rebuffer_commands = []
         self.rebuffer_timers = []
+        self.song_queue = None
 
     def accept(self):
         if self.connection:
@@ -158,6 +159,8 @@ class LMS:
         return p
 
     def react(self, packet):
+        if self.song_queue is not None:
+            self.song_queue.react(packet)
         # Opt-in LMS output-underrun reaction: pause immediately, then unpause
         # after the fixture's deliberately controlled refill interval.
         if packet.get('event') == 'STMo' and self.rebuffer_delay is not None:
@@ -209,6 +212,41 @@ class LMS:
         if self.connection:
             self.connection.close()
         self.listener.close()
+
+
+class SongQueue:
+    """LMS starts the currently streamed song on STMs, not a decoder FIFO.
+
+    Successors are requested after STMd, with a two-ahead ceiling. This oracle
+    deliberately exposes STMd-before-STMs as the wrong playing occurrence.
+    """
+    def __init__(self, lms, sources, first=1):
+        self.lms, self.sources = lms, iter(sources)
+        self.streaming = self.playing = first - 1
+        self.ready = False
+        lms.song_queue = self
+        self.advance()
+
+    def advance(self):
+        if self.streaming - self.playing >= 2:
+            self.ready = True
+            return
+        source = next(self.sources, None)
+        if source is not None:
+            http, options = source
+            self.streaming += 1
+            self.ready = False
+            self.lms.strm('s', http, **options)
+
+    def react(self, packet):
+        event = packet.get('event')
+        if event == 'STMs':
+            self.playing = self.streaming
+            packet['playing_occurrence'] = self.playing
+            if self.ready:
+                self.advance()
+        elif event in ('STMd', 'STMn'):
+            self.advance()
 
 
 class Session:

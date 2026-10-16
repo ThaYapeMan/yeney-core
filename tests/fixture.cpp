@@ -125,6 +125,8 @@ public:
     void flush() override {
         audibleFrames();
         delivery_.clear();
+        starts_.clear();
+        described_.clear();
         frames_ = audible_;
         events_ << "flush" << std::endl;
     }

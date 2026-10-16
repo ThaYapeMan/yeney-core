@@ -245,6 +245,7 @@ struct Mp4Demuxer::Impl {
     Header onHeader;
     Packet onPacket;
     size_t cap;
+    bool partialMedia;
     Bytes header, payload, packet;
     std::string type;
     uint64_t offset = 0, remaining = 0;
@@ -261,7 +262,8 @@ struct Mp4Demuxer::Impl {
     };
     std::vector<Media> early;
     size_t earlyBytes = 0;
-    Impl(Header h, Packet p, size_t c) : onHeader(std::move(h)), onPacket(std::move(p)), cap(c) {}
+    Impl(Header h, Packet p, size_t c, bool partial)
+        : onHeader(std::move(h)), onPacket(std::move(p)), cap(c), partialMedia(partial) {}
     void movie() {
         if (selected)
             bad("multiple moov boxes");
@@ -455,6 +457,13 @@ struct Mp4Demuxer::Impl {
     void finish() {
         if (finished)
             bad("duplicate finish");
+        // LMS can retain the original mdat length in a rewritten seek header.
+        // In queue mode preserve all complete packets, then let the decoder's
+        // exact frame count distinguish a harmless tail from source-short.
+        if (partialMedia && selected && ((active && type == "mdat") || next == samples.size())) {
+            finished = true;
+            return;
+        }
         if (!header.empty() || (active && !toEnd))
             bad("truncated top-level box");
         if (active)
@@ -464,8 +473,8 @@ struct Mp4Demuxer::Impl {
         finished = true;
     }
 };
-Mp4Demuxer::Mp4Demuxer(Header h, Packet p, size_t cap)
-    : impl_(std::make_unique<Impl>(std::move(h), std::move(p), cap)) {}
+Mp4Demuxer::Mp4Demuxer(Header h, Packet p, size_t cap, bool partialMedia)
+    : impl_(std::make_unique<Impl>(std::move(h), std::move(p), cap, partialMedia)) {}
 Mp4Demuxer::~Mp4Demuxer() = default;
 void Mp4Demuxer::feed(const uint8_t *p, size_t n) { impl_->feed(p, n); }
 void Mp4Demuxer::finish() { impl_->finish(); }

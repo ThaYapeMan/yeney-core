@@ -624,7 +624,7 @@ class AlacWorker : public Worker {
                         emit(decodeFrame(output.data() + size_t(i) * info.format.channels * (storageBits / 8),
                                          storage));
             },
-            cfg.earlyMediaCap);
+            cfg.earlyMediaCap, cfg.finitePcmContainers);
         uint8_t bytes[8192];
         while (size_t n = read(bytes, sizeof(bytes)))
             demux.feed(bytes, n);

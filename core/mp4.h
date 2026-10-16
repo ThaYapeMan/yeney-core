@@ -24,7 +24,7 @@ class Mp4Demuxer {
 public:
     using Header = std::function<void(const Mp4Info &)>;
     using Packet = std::function<void(const Bytes &)>;
-    Mp4Demuxer(Header, Packet, size_t earlyMediaCap = 256ull * 1024 * 1024);
+    Mp4Demuxer(Header, Packet, size_t earlyMediaCap = 256ull * 1024 * 1024, bool partialMedia = false);
     ~Mp4Demuxer();
     void feed(const uint8_t *, size_t);
     void finish();
