@@ -295,3 +295,8 @@ emitted by DSCO. Queue command logging makes that relationship visible. This
 matches the unpause acknowledgement described by the
 [squeezelite protocol implementation](https://github.com/ralph-irving/squeezelite/blob/master/slimproto.c);
 only protocol semantics were consulted, with no source copied or translated.
+
+`Sink::committedItemFrames` optionally supplies the promised rendered source
+portion (excluding a predecessor prefix). The outgoing successor deadline uses
+that count rather than the unshortened source duration; without a host promise,
+it uses the decoded count. This queue-only hook cannot change stream pacing.

@@ -950,7 +950,8 @@ struct Player::Impl {
         return true;
     }
     uint32_t successorDeadline(const Track &t) const {
-        return t.audibleAt + uint32_t(std::max(0.0, double(t.produced) / t.format.rate * 1000 - 100));
+        const auto frames = sink.committedItemFrames(t.descriptor.occurrence).value_or(t.produced);
+        return t.audibleAt + uint32_t(std::max(0.0, double(frames) / t.format.rate * 1000 - 100));
     }
     bool waitSuccessor(const Track &t) const {
         if (!sink.decodeAhead() || output.size() != 1 || t.transition != 1 || t.failed)
