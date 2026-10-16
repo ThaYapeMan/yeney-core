@@ -456,6 +456,8 @@ struct Player::Impl {
         DecoderConfig c;
         c.codec = p[0];
         t.descriptor.codec = c.codec;
+        if (sink.decodeAhead())
+            sink.coreEvent("codec:" + std::string(1, c.codec), t.descriptor.occurrence, submitted);
         c.finitePcmContainers = sink.decodeAhead();
         c.transcoded = cfg.sourceIsTranscoded && cfg.sourceIsTranscoded(t.descriptor.occurrence);
         c.size = p[1];
