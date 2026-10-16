@@ -781,9 +781,13 @@ struct Player::Impl {
             t.produced += count;
             t.output.insert(t.output.end(), frames, frames + count);
             queued += count;
-            if (sink.decodeAhead())
+            // Observe completion before its error: the worker publishes the
+            // error before done. Reuse this snapshot below so a completion
+            // racing this poll cannot bypass queue fault handling.
+            const bool queueComplete = sink.decodeAhead() && t.decoder->done();
+            if (queueComplete)
                 error = t.decoder->error();
-            if (sink.decodeAhead() && !error.empty() && t.decoder->done()) {
+            if (queueComplete && !error.empty()) {
                 const auto exact = t.decoder->exactFrames();
                 if (sink.decodeAhead() && exact && *exact > t.produced &&
                     *exact - t.produced <= t.format.rate) {
@@ -798,7 +802,7 @@ struct Player::Impl {
                     throw std::runtime_error(error);
             }
             size_t target = std::min(cfg.outputFrames, size_t(t.outputThreshold) * t.format.rate / 10);
-            bool complete = t.decoder->done();
+            bool complete = sink.decodeAhead() ? queueComplete : t.decoder->done();
             if (sink.decodeAhead() && complete && !t.produced)
                 throw std::runtime_error("source-empty");
             if (t.autostart == 0 && (t.output.size() >= target || complete)) {
