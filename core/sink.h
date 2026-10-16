@@ -50,6 +50,9 @@ public:
     // Queue promise, excluding any retained predecessor prefix. Used only to
     // bound a late outgoing overlap by the actual remaining audible item time.
     virtual std::optional<uint64_t> committedItemFrames(uint64_t) const { return std::nullopt; }
+    // A sealed-only host cannot announce an unknown-count item until its
+    // outgoing boundary resolves. Its pre-start successor deadline is zero.
+    virtual bool awaitingPublication(uint64_t) const { return false; }
     virtual uint32_t maxSampleRate() const { return 48000; }
     virtual void trackBoundary(uint64_t frame, const Format &, bool gaplessCandidate) = 0;
     virtual size_t write(const Frame *, size_t frames) = 0;

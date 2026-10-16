@@ -781,7 +781,8 @@ struct Player::Impl {
             t.produced += count;
             t.output.insert(t.output.end(), frames, frames + count);
             queued += count;
-            error = t.decoder->error();
+            if (sink.decodeAhead())
+                error = t.decoder->error();
             if (sink.decodeAhead() && !error.empty() && t.decoder->done()) {
                 const auto exact = t.decoder->exactFrames();
                 if (sink.decodeAhead() && exact && *exact > t.produced &&
@@ -960,6 +961,9 @@ struct Player::Impl {
             return false;
         if (!t.decoded)
             return true;
+        if (!t.startReported && !t.descriptor.sourceFrames &&
+            sink.awaitingPublication(t.descriptor.occurrence))
+            return false;
         // The held tail must be resolved before its audible deadline. A short
         // first item keeps one frame to establish STMs before requesting more.
         const auto position = sink.audibleFrames();
@@ -996,7 +1000,12 @@ struct Player::Impl {
                     if (sink.decodeAhead()) {
                         sink.coreEvent("decoder-track-end", t->descriptor.occurrence, submitted);
                         if (output.size() == 1)
-                            itemEnd(t, 0, 0, t->transition == 0 ? "no-transition" : "successor-deadline");
+                            itemEnd(t, 0, 0,
+                                    t->transition == 0 ? "no-transition"
+                                    : !t->startReported && !t->descriptor.sourceFrames &&
+                                            sink.awaitingPublication(t->descriptor.occurrence)
+                                        ? "sealed-startup"
+                                        : "successor-deadline");
                     }
                     output.pop_front();
                     continue;

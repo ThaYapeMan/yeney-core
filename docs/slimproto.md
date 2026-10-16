@@ -300,3 +300,9 @@ only protocol semantics were consulted, with no source copied or translated.
 portion (excluding a predecessor prefix). The outgoing successor deadline uses
 that count rather than the unshortened source duration; without a host promise,
 it uses the decoded count. This queue-only hook cannot change stream pacing.
+
+A sealed-only host exposes `awaitingPublication` for an unknown-count item.
+That item has no remaining audible time before sealing: its startup successor
+bound is zero, logged as `sealed-startup`. Resolve its full tail without overlap
+rather than deadlock sealing -> STMs -> STMd -> successor. This preserves all
+PCM and sealed publication; it is an explicit degraded transition.
