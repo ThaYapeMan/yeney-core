@@ -789,8 +789,7 @@ struct Player::Impl {
                 error = t.decoder->error();
             if (queueComplete && !error.empty()) {
                 const auto exact = t.decoder->exactFrames();
-                if (sink.decodeAhead() && exact && *exact > t.produced &&
-                    *exact - t.produced <= t.format.rate) {
+                if (t.produced && exact && *exact > t.produced && *exact - t.produced <= t.format.rate) {
                     const auto shortfall = *exact - t.produced;
                     t.output.insert(t.output.end(), shortfall, Frame{});
                     queued += shortfall;
@@ -1003,7 +1002,10 @@ struct Player::Impl {
                         t->end = submitted;
                     if (sink.decodeAhead()) {
                         sink.coreEvent("decoder-track-end", t->descriptor.occurrence, submitted);
-                        if (output.size() == 1)
+                        if (!t->boundary)
+                            itemEnd(t, output.size() > 1 ? output[1]->descriptor.occurrence : 0, 0,
+                                    t->failed ? "source-fault" : "unplayed");
+                        else if (output.size() == 1)
                             itemEnd(t, 0, 0,
                                     t->transition == 0 ? "no-transition"
                                     : !t->startReported && !t->descriptor.sourceFrames &&
@@ -1101,7 +1103,7 @@ struct Player::Impl {
         }
         audibleEvents();
         if (queued == 0 && fetching && fetching->decoded && output.empty() && sink.drained(submitted) &&
-            !ended) {
+            !ended && (!sink.decodeAhead() || !fetching->failed)) {
             sink.idle();
             stat("STMu");
             ended = true;

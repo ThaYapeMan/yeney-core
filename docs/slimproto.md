@@ -306,3 +306,12 @@ That item has no remaining audible time before sealing: its startup successor
 bound is zero, logged as `sealed-startup`. Resolve its full tail without overlap
 rather than deadlock sealing -> STMs -> STMd -> successor. This preserves all
 PCM and sealed publication; it is an explicit degraded transition.
+
+Padding requires at least one decoded source frame. A valid MP4 header followed
+by no decodable samples faults without creating a silence-only audible start;
+the next occurrence retains its own identity.
+
+After a queue source fault, STMn owns the server's failure/advance response;
+do not immediately append STMu for that failed source, which could stop a
+successor already requested by LMS. Sources that resolve without an item also
+retire their pending descriptor before the successor's boundary.

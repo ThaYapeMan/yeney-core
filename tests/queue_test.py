@@ -84,6 +84,18 @@ class QueueTests(unittest.TestCase):
                 self.assertEqual(s.data(), expected)
                 if name == 'short':
                     self.assertTrue(any('source-short 3825 frames' in x for x in s.events()))
+        # A valid rewritten header with no decodable samples has no last
+        # decoded frame after which to pad: it must never manufacture STMs.
+        stream = (root/'queue-alac-seek.m4a').read_bytes()
+        empty = stream[:stream.index(b'mdat') + 4]
+        with Session(mode='queue') as s:
+            SongQueue(s.lms, [(s.source(empty), dict(fmt='l')),
+                              (s.source(struct.pack('<hh', 31, -31)*1600), dict(rate=8000))])
+            s.lms.wait('STMu', timeout=6)
+            self.assertEqual([p['playing_occurrence'] for p in s.lms.packets if p.get('event') == 'STMs'], [2])
+            self.assertEqual(sum(p.get('event') == 'STMn' for p in s.lms.packets), 1)
+            self.assertEqual(len(s.data()), 1600*8)
+        print('PASS empty MP4 source: no silence-only promise or STMs; successor is the first audible occurrence')
         # Start immediately after HELO, fault with retained decoded PCM, then
         # successor / owner flush / replacement. A fault must drain before STMn.
         with Session(mode='queue') as s:

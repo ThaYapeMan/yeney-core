@@ -47,6 +47,7 @@ public:
                 << (d.sourceFrames ? std::to_string(*d.sourceFrames) : "unknown") << std::endl;
     }
     void resolvedItemBoundary(const yeney::ItemBoundary &b) override {
+        described_.erase(std::remove(described_.begin(), described_.end(), b.occurrence), described_.end());
         events_ << "item-end " << b.occurrence << ' ' << b.next << ' ' << b.frame << ' ' << b.overlap << ' '
                 << b.reason << std::endl;
     }
