@@ -70,6 +70,17 @@ from frame-aligned data. Thus a seek must not require the original `fLaC` header
 The library API contract is documented at
 https://xiph.org/flac/api/group__flac__stream__decoder.html.
 
+In queue capability only, `Config::flacSourceInfo` lets the host resolve the
+original STREAMINFO on the decoder worker before its first output frame. A
+header supplies metadata to the host cache; a headerless seek requests it.
+Hosts must bound the entire lookup to one second. The frame's original wire
+number is parsed according to [RFC 9639](https://www.rfc-editor.org/rfc/rfc9639.html),
+including CRC-8 and FLAC integer coding. Variable blocks supply a sample number;
+fixed blocks supply a frame number multiplied by the original maximum block
+size, even for a short final block. Exact remaining frames are total minus that
+origin. Missing metadata or an uncertain header keeps sealed publication and
+logs the reason. Stream capability never calls the resolver or captures headers.
+
 ## MP3
 
 Wire code `m` uses unmodified minimp3 at commit

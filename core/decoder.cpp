@@ -371,10 +371,15 @@ class FlacWorker : public Worker {
     bool hadFrame = false;
     uint64_t sourceTotal = 0;
     unsigned sourceBlockSize = 0;
+    Bytes firstBytes;
     static FLAC__StreamDecoderReadStatus readCb(const FLAC__StreamDecoder *, FLAC__byte *bytes, size_t *n,
                                                 void *self) {
         try {
-            *n = static_cast<FlacWorker *>(self)->read(bytes, *n);
+            auto &w = *static_cast<FlacWorker *>(self);
+            *n = w.read(bytes, *n);
+            if (w.cfg.finitePcmContainers && w.cfg.flacSourceInfo && w.firstBytes.size() < 64)
+                w.firstBytes.insert(w.firstBytes.end(), bytes,
+                                    bytes + std::min(*n, 64 - w.firstBytes.size()));
             return *n ? FLAC__STREAM_DECODER_READ_STATUS_CONTINUE
                       : FLAC__STREAM_DECODER_READ_STATUS_END_OF_STREAM;
         } catch (...) {
@@ -388,13 +393,43 @@ class FlacWorker : public Worker {
             Format format{f->header.sample_rate, f->header.bits_per_sample, f->header.channels, false};
             if (format.bits != 16 && format.bits != 24)
                 throw std::runtime_error("FLAC requires 16 or 24 bits");
+            std::optional<FlacFrameOrigin> rawOrigin;
+            if (!w.hadFrame && w.cfg.finitePcmContainers && w.cfg.flacSourceInfo) {
+                std::optional<FlacSourceInfo> info;
+                if (w.sourceTotal)
+                    info = FlacSourceInfo{w.sourceTotal, w.sourceBlockSize};
+                else
+                    rawOrigin = flacFrameOrigin(w.firstBytes.data(), w.firstBytes.size());
+                if (!info && !rawOrigin && w.cfg.flacLog)
+                    w.cfg.flacLog("sealed fallback: first frame source number unavailable");
+                // Never turn uncertain sync scanning into an exact promise.
+                if (info || rawOrigin) {
+                    info = w.cfg.flacSourceInfo(info);
+                    if (info) {
+                        w.sourceTotal = info->totalSamples;
+                        w.sourceBlockSize = info->fixedBlockSize;
+                    }
+                }
+            }
             if (!w.hadFrame && w.sourceTotal) {
-                const uint64_t origin = f->header.number_type == FLAC__FRAME_NUMBER_TYPE_SAMPLE_NUMBER
-                                            ? f->header.number.sample_number
-                                            : uint64_t(f->header.number.frame_number) * w.sourceBlockSize;
-                if (origin > w.sourceTotal)
-                    throw std::runtime_error("FLAC seek origin exceeds source count");
-                w.setExactFrames(w.sourceTotal - origin);
+                const uint64_t origin =
+                    rawOrigin
+                        ? (rawOrigin->variable ? rawOrigin->number : rawOrigin->number * w.sourceBlockSize)
+                    : f->header.number_type == FLAC__FRAME_NUMBER_TYPE_SAMPLE_NUMBER
+                        ? f->header.number.sample_number
+                        : uint64_t(f->header.number.frame_number) * w.sourceBlockSize;
+                if (origin > w.sourceTotal || (rawOrigin && !rawOrigin->variable && !w.sourceBlockSize)) {
+                    if (w.cfg.finitePcmContainers && w.cfg.flacSourceInfo) {
+                        if (w.cfg.flacLog)
+                            w.cfg.flacLog("sealed fallback: invalid source count/origin");
+                    } else
+                        throw std::runtime_error("FLAC seek origin exceeds source count");
+                } else {
+                    w.setExactFrames(w.sourceTotal - origin);
+                    if (w.cfg.flacLog)
+                        w.cfg.flacLog("exact remaining=" + std::to_string(w.sourceTotal - origin) +
+                                      " first sample=" + std::to_string(origin));
+                }
             }
             w.setFormat(format);
             w.hadFrame = true;

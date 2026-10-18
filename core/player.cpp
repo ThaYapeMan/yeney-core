@@ -459,6 +459,15 @@ struct Player::Impl {
         if (sink.decodeAhead())
             sink.coreEvent("codec:" + std::string(1, c.codec), t.descriptor.occurrence, submitted);
         c.finitePcmContainers = sink.decodeAhead();
+        if (sink.decodeAhead() && cfg.flacSourceInfo) {
+            const auto id = t.descriptor.occurrence;
+            c.flacLog = [this, id](const std::string &text) {
+                log("queue FLAC occurrence=" + std::to_string(id) + " " + text);
+            };
+            c.flacSourceInfo = [this, id](std::optional<FlacSourceInfo> info) {
+                return cfg.flacSourceInfo(id, info);
+            };
+        }
         c.transcoded = cfg.sourceIsTranscoded && cfg.sourceIsTranscoded(t.descriptor.occurrence);
         c.size = p[1];
         c.rate = p[2];

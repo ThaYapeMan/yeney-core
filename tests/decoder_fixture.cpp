@@ -17,6 +17,12 @@ int main(int argc, char **argv) {
         yeney::DecoderConfig cfg;
         cfg.codec = argv[1][0];
         cfg.finitePcmContainers = true;
+        if (const char *total = std::getenv("YENEY_TEST_FLAC_TOTAL")) {
+            const uint64_t n = std::stoull(total);
+            cfg.flacSourceInfo = [n](std::optional<yeney::FlacSourceInfo> info) {
+                return info ? info : std::optional<yeney::FlacSourceInfo>{{n, 4096}};
+            };
+        }
         cfg.transcoded = std::getenv("YENEY_TEST_TRANSCODED") != nullptr;
         if (argc > 4)
             cfg.earlyMediaCap = std::stoull(argv[4]);

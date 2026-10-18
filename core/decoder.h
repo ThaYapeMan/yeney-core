@@ -5,13 +5,19 @@
 // THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
 
 #pragma once
+#include "flac_header.h"
 #include "protocol.h"
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 namespace yeney {
 struct DecoderConfig {
     char codec = 'p';
+    // Queue-only, called on the decoder worker before the first output frame.
+    // Hosts must return within one second; missing metadata keeps sealed output.
+    std::function<std::optional<FlacSourceInfo>(std::optional<FlacSourceInfo>)> flacSourceInfo;
+    std::function<void(const std::string &)> flacLog;
     bool finitePcmContainers = false; // queue-only: stop at validated container payload length
     bool transcoded = false;          // authoritative host/source metadata, never inferred from PCM
     uint8_t size = '1', rate = '4', channels = '2', endian = '1';

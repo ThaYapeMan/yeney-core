@@ -4,6 +4,7 @@
 // Licensed under the PolyForm Noncommercial License 1.0.0. See LICENSE.
 // THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
 
+#include "core/flac_header.h"
 #include "core/protocol.h"
 #include "core/ring.h"
 #include "core/sample_conversion.h"
@@ -15,6 +16,22 @@
 #include <random>
 using namespace yeney;
 int main() {
+    {
+        const uint8_t fixed[] = {0xff, 0xf8, 0x79, 0x88, 4, 6, 0x4f, 0x6f};
+        const uint8_t variable[] = {0xff, 0xf9, 0x79, 0x88, 0xe4, 0x80, 0x80, 6, 0x4f, 5};
+        auto f = flacFrameOrigin(fixed, sizeof(fixed));
+        auto v = flacFrameOrigin(variable, sizeof(variable));
+        assert(f && !f->variable && f->number == 4);
+        assert(v && v->variable && v->number == 16384);
+        for (size_t n = 0; n < sizeof(variable); ++n)
+            assert(!flacFrameOrigin(variable, n));
+        auto bad = Bytes(variable, variable + sizeof(variable));
+        bad.back() ^= 1;
+        assert(!flacFrameOrigin(bad.data(), bad.size()));
+        bad[4] = 0x80; // Invalid initial continuation byte.
+        assert(!flacFrameOrigin(bad.data(), bad.size()));
+        std::cout << "PASS FLAC wire origin: fixed/variable numbering, truncated headers and CRC rejection\n";
+    }
     using detail::floatToFrame;
     assert(floatToFrame(0.0f) == 0 && floatToFrame(-0.0f) == 0);
     assert(floatToFrame(0.5f) == 1073741824 && floatToFrame(-0.5f) == -1073741824);

@@ -20,3 +20,12 @@ Queue field regressions are independently rewritten from `alac-16-2.m4a`:
 with the original (longer) mdat length retained. `queue-alac-short.m4a` has the
 same 7,921-frame promise but only its first 4,096 frames of complete samples.
 These model LMS header rewriting; no owner media or raw field logs are included.
+
+`queue-flac-seek-fixed.flac` is the final frame of the existing original
+`flac-16-2.flac` signal (18000 samples), without STREAMINFO. Its fixed frame
+number 4 means source sample 16384 using the original 4096-frame block size,
+including when this last block is only 1616 frames. The variable fixture
+encodes sample 16384 directly using FLAC's UTF-8-style integer coding; header
+CRC-8 and frame CRC-16 were recomputed. Both decode to the final 1616 frames of
+the existing PCM reference. These are derived local test signals, not owner data.
+The parser follows RFC 9639 section 9.1 (https://www.rfc-editor.org/rfc/rfc9639.html).

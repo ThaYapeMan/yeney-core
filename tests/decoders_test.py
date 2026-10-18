@@ -228,6 +228,21 @@ class DecoderTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, stderr)
         return result.stdout.decode()
 
+    def test_queue_headerless_flac_exact_remaining(self):
+        reference = zlib.decompress((ROOT/'tests/fixtures/flac-16-2.reference.zlib').read_bytes())
+        for kind in ('fixed', 'variable'):
+            source = ROOT/f'tests/fixtures/queue-flac-seek-{kind}.flac'
+            output = self.dir/f'seek-{kind}.pcm'
+            env = dict(os.environ, YENEY_TEST_FLAC_TOTAL='18000')
+            result = run([ROOT/'decoder-test', 'f', source, output], env=env)
+            self.assertIn(b'EXACT 1616', result.stdout)
+            self.assertEqual(output.read_bytes(), reference[16384*8:])
+            # Without host metadata, retain the conservative sealed path.
+            result = run([ROOT/'decoder-test', 'f', source, output])
+            self.assertIn(b'EXACT unknown', result.stdout)
+            self.assertEqual(output.read_bytes(), reference[16384*8:])
+        print('PASS queue headerless FLAC: fixed and variable wire numbers, final short block exact remaining 1616; missing metadata stays sealed', flush=True)
+
     def test_01_flac_bit_exact_and_headerless_seek(self):
         if not FLAC:
             print('SKIP generated FLAC reference/seek fixtures: flac CLI unavailable or generation disabled; testing committed references', flush=True)

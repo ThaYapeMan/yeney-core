@@ -22,6 +22,7 @@ struct Config {
     std::string discoveryAddress = "255.255.255.255";
     std::array<uint8_t, 6> mac{0x02, 0, 0, 0, 0, 1};
     double futurePcmSeconds = 30.0;
+    std::function<std::optional<FlacSourceInfo>(uint64_t, std::optional<FlacSourceInfo>)> flacSourceInfo;
     unsigned queueStartupMs = 15000;
     std::function<bool(uint64_t)> sourceIsTranscoded;
     // Optional host-provided smart rule; strm itself contains no album identity.
