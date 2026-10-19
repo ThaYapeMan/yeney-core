@@ -219,10 +219,13 @@ class ShmTests(unittest.TestCase):
         try:
             from lampastream import pcm_source
         except ImportError as e:
+            if 'LAMPASTREAM_CHECKOUT' in os.environ:
+                self.fail(f'explicit LampaStream consumer import failed: {e}')
             print(f'SKIP cross-repo LampaStream consumer: Python dependency unavailable: {e}', flush=True)
             self.skipTest(str(e))
         print(f'Cross-repo consumer: {checkout}/src/lampastream/pcm_source.py (require_v1=True)', flush=True)
         self.exercise_tracks(pcm_source)
+        print('PASS cross-repo LampaStream SHM consumer (require_v1=True)', flush=True)
 
 
 if __name__ == '__main__':
