@@ -56,6 +56,10 @@ public:
     virtual bool takeAudibleStart(AudibleStart &) { return false; }
     // Opt-in remote queue clock/state. Defaults preserve existing stream sinks.
     virtual bool speakerDriven() const { return false; }
+    // Optional serialized remote-control owner. Return true only when the host
+    // consumes this command. No status acknowledgement is fabricated by core;
+    // speaker evidence remains authoritative. s may be consumed for cache reuse.
+    virtual bool queueCommand(char, uint32_t) { return false; }
     virtual bool takeAudibleState(AudibleState &) { return false; }
     virtual std::optional<uint32_t> audibleElapsedMs(uint64_t) const { return std::nullopt; }
     // Queue promise, excluding any retained predecessor prefix. Used only to

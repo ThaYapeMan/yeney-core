@@ -20,6 +20,7 @@
 #include <deque>
 #include <fcntl.h>
 #include <limits>
+#include <map>
 #include <netdb.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -165,6 +166,7 @@ struct Player::Impl {
         sink.resolvedItemBoundary({t->descriptor.occurrence, next, submitted, overlapFrames, reason});
     }
     std::deque<std::shared_ptr<Track>> output, boundaries;
+    std::map<uint64_t, std::shared_ptr<Track>> retainedTracks;
     std::shared_ptr<Track> fetching, audible;
     std::deque<std::shared_ptr<Track>> faults;
     size_t queued = 0;
@@ -243,6 +245,7 @@ struct Player::Impl {
         overlap = {};
         reservedWindow = 0;
         boundaries.clear();
+        retainedTracks.clear();
         faults.clear();
         lastItem.reset();
         queued = 0;
@@ -494,6 +497,11 @@ struct Player::Impl {
                 log("queue command strm " + std::string(1, char(b[4])));
             if (cfg.observeCommand)
                 cfg.observeCommand({char(b[4]), value, playing && !paused && submittedSinceFlush});
+            if (sink.decodeAhead() && sink.speakerDriven() && sink.queueCommand(char(b[4]), value)) {
+                if (b[4] == 'q' || b[4] == 'f')
+                    stat("STMf");
+                return;
+            }
             switch (b[4]) {
             case 't':
                 stat("STMt", value);
@@ -854,8 +862,28 @@ struct Player::Impl {
     }
     void audibleEvents() {
         if (sink.decodeAhead()) {
+            // History keeps track identity/timing, not decoder or PCM buffers.
+            for (auto &entry : retainedTracks)
+                if (entry.second != fetching && entry.second->decoded && entry.second->output.empty())
+                    entry.second->decoder.reset();
             AudibleStart signal;
             while (sink.takeAudibleStart(signal)) {
+                auto retained = retainedTracks.find(signal.occurrence);
+                if (sink.speakerDriven() && signal.confirmed && retained != retainedTracks.end() &&
+                    retained->second->first == signal.frame && retained->second->played) {
+                    if (audible == retained->second)
+                        continue;
+                    audible = retained->second;
+                    auto pending = std::find(boundaries.begin(), boundaries.end(), audible);
+                    if (pending != boundaries.end())
+                        boundaries.erase(boundaries.begin(), std::next(pending));
+                    stat("STMs");
+                    sink.coreEvent("STMs", signal.occurrence, signal.frame);
+                    audible->startReported = true;
+                    audible->audibleAt = jiffies();
+                    reportDecoded(*audible);
+                    continue;
+                }
                 auto it = std::find_if(boundaries.begin(), boundaries.end(), [&](const auto &t) {
                     return t->descriptor.occurrence == signal.occurrence;
                 });
@@ -925,6 +953,12 @@ struct Player::Impl {
         t->boundary = true;
         sink.trackBoundary(submitted, t->format, t->gapless);
         boundaries.push_back(t);
+        if (sink.decodeAhead() && sink.speakerDriven()) {
+            retainedTracks[t->descriptor.occurrence] = t;
+            // Match the host queue cap and retain metadata only, never PCM.
+            while (retainedTracks.size() > 60000)
+                retainedTracks.erase(retainedTracks.begin());
+        }
         log("boundary frame=" + std::to_string(submitted) + " rate=" + std::to_string(t->format.rate) +
             " gapless=" + std::to_string(t->gapless) + " jiffies=" + std::to_string(jiffies()));
     }
