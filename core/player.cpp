@@ -596,8 +596,28 @@ struct Player::Impl {
     }
     void start(const Bytes &b) {
         bool gapless = fetching && fetching->decoded && !ended;
-        if (fetching && !fetching->decoded)
-            clear(true);
+        const bool refetch = sink.decodeAhead() && sink.speakerDriven() && sink.takeQueueRefetch();
+        if (fetching && !fetching->decoded) {
+            if (refetch) {
+                // Keep immutable host assets, audible clock and cached track
+                // identities. Only the superseded producer's PCM is discarded.
+                for (const auto &t : output) {
+                    if (!t->decoded) {
+                        sink.coreEvent("queue-refetch", t->descriptor.occurrence, submitted);
+                        t->failed = true; // cancellation must not report STMd
+                    }
+                    t->output.clear();
+                    t->decoder.reset();
+                }
+                output.clear();
+                fetching.reset();
+                lastItem.reset();
+                overlap = {};
+                reservedWindow = queued = 0;
+                transitionOverlap = 0;
+            } else
+                clear(true);
+        }
         stopStream();
         received = 0;
         bodyReceived = 0;

@@ -39,3 +39,39 @@ with tempfile.TemporaryDirectory(prefix='yeney-speaker-') as folder:
         proc.send_signal(signal.SIGTERM); proc.wait(3)
         lms.close(); source.close()
         assert proc.returncode == 0
+
+# Refetching a progressive item is explicitly authorized by the queue host;
+# default and subsequent unarmed starts retain destructive flush semantics.
+with tempfile.TemporaryDirectory(prefix='yeney-refetch-') as folder:
+    path = Path(folder)/'state'
+    lms = LMS()
+    body = struct.pack('<hh',100,-100)*8000*24
+    sources = [HTTP(body,first=4*8000*4,delay=60),
+               HTTP(body,first=4*8000*4,delay=60), HTTP(body[:8000*4])]
+    with (Path(folder)/'core.log').open('w+') as log:
+        proc = subprocess.Popen([str(ROOT/'test-speaker'),str(lms.listener.getsockname()[1]),str(path)],stdout=log)
+        def output():
+            log.flush()
+            return Path(log.name).read_text()
+        try:
+            lms.accept(); lms.strm('s',sources[0],rate=8000)
+            lms.wait('RESP'); time.sleep(.1)
+            path.write_text('1 0 r\n'); lms.wait('STMs')
+            initial = output().count('FLUSH')
+            path.write_text('2 0 x\n'); lms.timer()
+            lms.strm('s',sources[1],rate=8000)
+            lms.wait('STMc'); lms.wait('RESP'); time.sleep(.1)
+            assert output().count('REFETCH') == 1, output()
+            assert output().count('FLUSH') == initial, output()
+            assert len([p for p in lms.packets if p.get('event') == 'STMs']) == 1
+            assert not any(p.get('event') == 'STMd' for p in lms.packets)
+            lms.strm('s',sources[2],rate=8000)
+            lms.wait('STMc'); lms.wait('RESP'); time.sleep(.1)
+            assert output().count('FLUSH') == initial+1, output()
+            assert output().count('REFETCH') == 1, output()
+            print('PASS queue refetch core: one-shot host authorization cancels progressive producer without sink flush or fabricated STMs/STMd; unarmed start still flushes')
+        finally:
+            proc.send_signal(signal.SIGTERM); proc.wait(3)
+            lms.close()
+            for source in sources: source.close()
+            assert proc.returncode == 0

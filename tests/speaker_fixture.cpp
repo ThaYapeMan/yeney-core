@@ -11,7 +11,7 @@ class Speaker : public yeney::Sink {
     unsigned serial = 0;
     uint64_t produced = 0;
     uint32_t elapsed = 0;
-    bool started = false, startPending = false, statePending = false;
+    bool started = false, startPending = false, statePending = false, refetchPending = false;
     yeney::PlaybackState state = yeney::PlaybackState::Playing;
     void read() {
         std::ifstream input(path);
@@ -21,6 +21,8 @@ class Speaker : public yeney::Sink {
             return;
         serial = next;
         elapsed = ms;
+        if (value == 'x')
+            refetchPending = true;
         state = value == 'p'   ? yeney::PlaybackState::Paused
                 : value == 's' ? yeney::PlaybackState::Stopped
                                : yeney::PlaybackState::Playing;
@@ -33,6 +35,16 @@ public:
     explicit Speaker(std::string file) : path(std::move(file)) {}
     bool decodeAhead() const override { return true; }
     bool speakerDriven() const override { return true; }
+    bool takeQueueRefetch() override {
+        read();
+        const bool result = refetchPending;
+        refetchPending = false;
+        return result;
+    }
+    void coreEvent(const std::string &event, uint64_t, uint64_t) override {
+        if (event == "queue-refetch")
+            std::cout << "REFETCH" << std::endl;
+    }
     bool takeAudibleStart(yeney::AudibleStart &s) override {
         read();
         if (!startPending || !produced)
@@ -59,7 +71,7 @@ public:
     void pause() override {}
     void resume() override {}
     void stop() override {}
-    void flush() override {}
+    void flush() override { std::cout << "FLUSH" << std::endl; }
     uint64_t audibleFrames() const override { return 0; }
     void volume(uint32_t, uint32_t) override {}
     void power(bool) override {}
