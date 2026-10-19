@@ -16,3 +16,5 @@ __pycache__/
 /decoder-benchmark
 
 /clock-unit
+
+/test-speaker

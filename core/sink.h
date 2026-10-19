@@ -33,6 +33,13 @@ struct ItemBoundary {
 };
 struct AudibleStart {
     uint64_t occurrence = 0, frame = 0;
+    // Speaker-confirmed zero is audible even before a positive PCM clock tick.
+    bool confirmed = false;
+};
+enum class PlaybackState { Playing, Paused, Stopped };
+struct AudibleState {
+    uint64_t occurrence = 0;
+    PlaybackState state = PlaybackState::Playing;
 };
 // All calls occur on the player's event-loop thread. Positions are cumulative
 // stereo frames, including across format changes. stop/flush must not rewind them.
@@ -47,6 +54,10 @@ public:
     virtual void resolvedItemBoundary(const ItemBoundary &) {}
     virtual void coreEvent(const std::string &, uint64_t, uint64_t) {}
     virtual bool takeAudibleStart(AudibleStart &) { return false; }
+    // Opt-in remote queue clock/state. Defaults preserve existing stream sinks.
+    virtual bool speakerDriven() const { return false; }
+    virtual bool takeAudibleState(AudibleState &) { return false; }
+    virtual std::optional<uint32_t> audibleElapsedMs(uint64_t) const { return std::nullopt; }
     // Queue promise, excluding any retained predecessor prefix. Used only to
     // bound a late outgoing overlap by the actual remaining audible item time.
     virtual std::optional<uint64_t> committedItemFrames(uint64_t) const { return std::nullopt; }

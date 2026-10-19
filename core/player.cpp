@@ -199,6 +199,9 @@ struct Player::Impl {
     uint32_t elapsed() const {
         if (!audible)
             return 0;
+        if (sink.decodeAhead() && sink.speakerDriven())
+            if (auto elapsed = sink.audibleElapsedMs(audible->descriptor.occurrence))
+                return *elapsed;
         return trackElapsedMs(sink.audibleFrames(), audible->first, audible->end, audible->skipped,
                               audible->format.rate);
     }
@@ -218,8 +221,9 @@ struct Player::Impl {
         // LMS returns early before interpolation when both elapsed fields are
         // zero. A network sink has already announced this audible gapless
         // boundary; keep interpolation seeded through immediate timer reports.
-        if (cfg.startOnSubmit && playing && !paused && audible && audible->gapless &&
-            (event == "STMs" || event == "STMt") && !s.elapsed)
+        if (((cfg.startOnSubmit && audible && audible->gapless) ||
+             (sink.decodeAhead() && sink.speakerDriven())) &&
+            playing && !paused && audible && (event == "STMs" || event == "STMt") && !s.elapsed)
             s.elapsed = 1;
         auto b = statusPacket(event, s, stamp);
         outbound.insert(outbound.end(), b.begin(), b.end());
@@ -856,7 +860,7 @@ struct Player::Impl {
                     return t->descriptor.occurrence == signal.occurrence;
                 });
                 if (it == boundaries.end() || (*it)->first != signal.frame || !(*it)->played ||
-                    signal.frame >= sink.audibleFrames()) {
+                    (!signal.confirmed && signal.frame >= sink.audibleFrames())) {
                     log("queue audible signal rejected");
                     continue;
                 }
@@ -867,6 +871,27 @@ struct Player::Impl {
                 audible->startReported = true;
                 audible->audibleAt = jiffies();
                 reportDecoded(*audible);
+            }
+            AudibleState state;
+            while (sink.speakerDriven() && sink.takeAudibleState(state)) {
+                if (!audible || state.occurrence != audible->descriptor.occurrence)
+                    continue;
+                const bool wasPaused = paused;
+                const bool wasPlaying = playing;
+                paused = state.state == PlaybackState::Paused;
+                playing = state.state != PlaybackState::Stopped;
+                userPaused = paused;
+                wake = 0;
+                credit = 0;
+                if (paused && !wasPaused)
+                    stat("STMp");
+                else if (!playing && wasPlaying) {
+                    stat("STMu");
+                    ended = true;
+                } else if (playing && !paused && (wasPaused || !wasPlaying)) {
+                    stat("STMr");
+                    ended = false;
+                }
             }
             while (!faults.empty() && faults.front()->end != UINT64_MAX &&
                    sink.drained(faults.front()->end)) {
@@ -1112,7 +1137,7 @@ struct Player::Impl {
         }
         audibleEvents();
         if (queued == 0 && fetching && fetching->decoded && output.empty() && sink.drained(submitted) &&
-            !ended && (!sink.decodeAhead() || !fetching->failed)) {
+            !ended && !sink.speakerDriven() && (!sink.decodeAhead() || !fetching->failed)) {
             sink.idle();
             stat("STMu");
             ended = true;
