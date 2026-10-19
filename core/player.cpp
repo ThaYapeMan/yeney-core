@@ -1214,7 +1214,18 @@ struct Player::Impl {
     void run(const std::atomic_bool &stop) {
         lastTick = lastStat = jiffies();
         nextConnect = nextDiscovery = lastTick;
+        auto modeGeneration = sink.playbackGeneration();
         while (!stop.load()) {
+            const auto mode = sink.playbackGeneration();
+            if (mode != modeGeneration) {
+                clear(true);
+                modeGeneration = mode;
+                // Publish capabilities before the host asks LMS for the
+                // continuation. Default sinks never enter this branch.
+                if (control.fd >= 0 && !controlConnecting)
+                    send("HELO", hello(cfg.mac, true, received, sink.maxSampleRate()));
+                sink.playbackReady(mode);
+            }
             uint32_t now = jiffies();
             controlStep(now);
             if (control.fd >= 0 && !controlConnecting) {

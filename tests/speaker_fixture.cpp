@@ -8,6 +8,8 @@ static std::atomic_bool done{false};
 static void stop(int) { done = true; }
 class Speaker : public yeney::Sink {
     std::string path;
+    bool modes = false;
+    uint64_t generation = 1;
     unsigned serial = 0;
     uint64_t produced = 0;
     uint32_t elapsed = 0;
@@ -32,9 +34,23 @@ class Speaker : public yeney::Sink {
     }
 
 public:
-    explicit Speaker(std::string file) : path(std::move(file)) {}
-    bool decodeAhead() const override { return true; }
-    bool speakerDriven() const override { return true; }
+    explicit Speaker(std::string file, bool handoff = false) : path(std::move(file)), modes(handoff) {}
+    uint64_t playbackGeneration() const override {
+        if (!modes)
+            return 0;
+        uint64_t value = generation;
+        std::ifstream(path + ".generation") >> value;
+        return value;
+    }
+    void playbackReady(uint64_t value) override {
+        generation = value;
+        produced = 0;
+        started = startPending = statePending = refetchPending = false;
+        std::cout << "MODE READY " << value << std::endl;
+    }
+    uint32_t maxSampleRate() const override { return modes && playbackGeneration() == 1 ? 192000 : 48000; }
+    bool decodeAhead() const override { return !modes || generation == 1; }
+    bool speakerDriven() const override { return !modes || generation == 1; }
     bool takeQueueRefetch() override {
         read();
         const bool result = refetchPending;
@@ -72,18 +88,18 @@ public:
     void resume() override {}
     void stop() override {}
     void flush() override { std::cout << "FLUSH" << std::endl; }
-    uint64_t audibleFrames() const override { return 0; }
+    uint64_t audibleFrames() const override { return modes && generation > 1 ? produced : 0; }
     void volume(uint32_t, uint32_t) override {}
     void power(bool) override {}
     bool paced() const override { return false; }
 };
 int main(int argc, char **argv) {
-    if (argc != 3)
+    if (argc != 3 && argc != 4)
         return 2;
     yeney::Config config;
     config.server = "127.0.0.1";
     config.port = std::stoul(argv[1]);
-    Speaker sink(argv[2]);
+    Speaker sink(argv[2], argc == 4);
     std::signal(SIGTERM, stop);
     yeney::Player player(config, sink);
     player.run(done);

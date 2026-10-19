@@ -75,3 +75,39 @@ with tempfile.TemporaryDirectory(prefix='yeney-refetch-') as folder:
             lms.close()
             for source in sources: source.close()
             assert proc.returncode == 0
+
+# Opt-in generation handoff discards the old producer and advertises the stream
+# capability before the room asks LMS for a continuation. Default fixtures above
+# use generation zero and retain their existing protocol transcripts.
+with tempfile.TemporaryDirectory(prefix='yeney-mode-') as folder:
+    path = Path(folder)/'state'
+    generation = Path(str(path)+'.generation')
+    generation.write_text('1')
+    lms = LMS()
+    source = HTTP(struct.pack('<hh',100,-100)*8000*24, first=8000*4, delay=60)
+    with (Path(folder)/'core.log').open('w+') as log:
+        proc = subprocess.Popen([str(ROOT/'test-speaker'),str(lms.listener.getsockname()[1]),str(path),'modes'],stdout=log)
+        try:
+            lms.accept(); lms.strm('s',source,rate=8000); lms.wait('RESP')
+            path.write_text('1 0 r\n'); lms.wait('STMs')
+            before = Path(log.name).read_text().count('FLUSH')
+            generation.write_text('2'); hello=lms.wait('HELO'); assert b'MaxSampleRate=48000' in hello['body'],hello
+            end=time.monotonic()+3
+            while 'MODE READY 2' not in Path(log.name).read_text() and time.monotonic()<end: time.sleep(.01)
+            text=Path(log.name).read_text()
+            assert 'MODE READY 2' in text,text
+            assert text.count('FLUSH')==before+1,text
+            assert text.rindex('FLUSH')<text.index('MODE READY 2'),text
+            count=len([p for p in lms.packets if p.get('event') in ('STMs','STMd')])
+            time.sleep(.1);lms.timer()
+            assert len([p for p in lms.packets if p.get('event') in ('STMs','STMd')])==count
+            continuation = HTTP(struct.pack('<hh',200,-200)*8000)
+            try:
+                lms.strm('s',continuation,rate=8000)
+                lms.wait('STMs'); lms.wait('STMu')
+                assert len([p for p in lms.packets if p.get('event') == 'STMs']) == 2
+            finally: continuation.close()
+            print('PASS mode generation core: producer/decoder/PCM reset before readiness, one capability HELO, no late queue start/advance; default generation-zero fixtures unchanged')
+        finally:
+            proc.send_signal(signal.SIGTERM);proc.wait(3);lms.close();source.close()
+            assert proc.returncode==0

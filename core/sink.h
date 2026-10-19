@@ -49,6 +49,9 @@ class Sink {
 public:
     virtual ~Sink() = default;
     // Queue-only capability. HTTP reads and decode progress never imply audible start.
+    // Optional room mode handoff; zero leaves all existing sink behavior intact.
+    virtual uint64_t playbackGeneration() const { return 0; }
+    virtual void playbackReady(uint64_t) {}
     virtual bool decodeAhead() const { return false; }
     virtual void trackDescriptor(const TrackDescriptor &) {}
     virtual void resolvedItemBoundary(const ItemBoundary &) {}
