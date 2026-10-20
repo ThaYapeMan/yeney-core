@@ -294,9 +294,10 @@ bool QueueMode::remoteCommand(char c, uint32_t value) {
             state.playing = state.paused = state.userPaused = false;
             state.ended = true;
         }
-        if (c == 'u') {
+        if (c == 'u' && !state.userPaused) {
             // Autostart=0 must release PCM production; the speaker still
-            // supplies every audible start/state acknowledgement.
+            // supplies every audible start/state acknowledgement. A confirmed
+            // pause must survive until its speaker resume so STMr is emitted.
             state.playing = true;
             state.paused = state.userPaused = false;
             state.wake = 0;

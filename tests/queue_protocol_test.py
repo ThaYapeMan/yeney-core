@@ -74,6 +74,11 @@ with tempfile.TemporaryDirectory(prefix='yeney-autostart-zero-') as folder:
         lms.strm('u');path.write_text('1 0 r\n');lms.wait('STMs');lms.wait('STMd')
         assert not any(p.get('event')=='STMr' for p in lms.packets)
         print('PASS queue autostart=0: LMS u releases production; STMs/STMd still require speaker confirmation; no fabricated STMr')
+        lms.strm('p');path.write_text('2 100 p\n');lms.wait('STMp')
+        lms.strm('u');lms.timer()
+        assert not any(p.get('event')=='STMr' for p in lms.packets)
+        path.write_text('3 100 r\n');lms.wait('STMr')
+        print('PASS consumed queue resume: confirmed pause preserved until speaker resumes, exactly one STMr, no premature acknowledgement')
     finally:
         proc.send_signal(signal.SIGTERM);proc.wait(3);lms.close();source.close()
 
