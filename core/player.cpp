@@ -429,6 +429,8 @@ struct Player::Impl {
             if (n < 28)
                 throw std::runtime_error("short strm");
             uint32_t value = be32(b.data() + 18);
+            if (b[4] == 's')
+                queue.receivedStartCommand(b);
             queue.commandObserved(char(b[4]));
             if (cfg.observeCommand)
                 cfg.observeCommand({char(b[4]), value, playing && !paused && submittedSinceFlush});
@@ -966,6 +968,8 @@ struct Player::Impl {
             queue.pollGeneration();
             uint32_t now = jiffies();
             controlStep(now);
+            if (auto pending = queue.takeStart(); !pending.empty())
+                start(pending);
             if (control.fd >= 0 && !controlConnecting) {
                 httpStep(now);
                 decode();

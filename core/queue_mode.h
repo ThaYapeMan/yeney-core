@@ -46,7 +46,7 @@ public:
 
 private:
     Hooks hooks;
-    Bytes lastStart;
+    Bytes lastStart, receivedStart;
     uint64_t nextStartCredits = 0;
     uint64_t occurrence = 0, transitionOverlap = 0, modeGeneration = 0;
     std::string transitionReason = "gapless";
@@ -75,6 +75,8 @@ public:
     void configureDecoder(Track &, DecoderConfig &);
     void commandObserved(char);
     bool repeatedStart(const Bytes &);
+    void receivedStartCommand(const Bytes &);
+    Bytes takeStart();
     bool remoteCommand(char, uint32_t);
     bool flush();
     bool beforeStart();

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <utility>
 namespace yeney::detail {
 QueueMode::QueueMode(Config &c, Sink &s, PlaybackBuffer p, Hooks h)
     : cfg(c), sink(s), state(p), hooks(std::move(h)) {}
@@ -200,6 +201,15 @@ void QueueMode::configureDecoder(Track &t, DecoderConfig &c) {
         };
     }
     c.transcoded = cfg.sourceIsTranscoded && cfg.sourceIsTranscoded(t.descriptor.occurrence);
+}
+void QueueMode::receivedStartCommand(const Bytes &request) {
+    if (sink.playbackGeneration() || sink.decodeAhead())
+        receivedStart = request;
+}
+Bytes QueueMode::takeStart() {
+    if (sink.takeQueueStart())
+        return std::exchange(receivedStart, {});
+    return {};
 }
 bool QueueMode::repeatedStart(const Bytes &request) {
     if (!sink.decodeAhead() || !sink.speakerDriven() || request.size() <= 28)

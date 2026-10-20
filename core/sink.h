@@ -66,6 +66,9 @@ public:
     // One-shot host authorization for an independent queue seek render. Only
     // decodeAhead + speakerDriven may cancel a producer without flushing assets.
     virtual bool takeQueueRefetch() { return false; }
+    // Resume an already received strm s after host selection/readiness. No CLI
+    // jump or server resend is needed; only managed queue sinks opt in.
+    virtual bool takeQueueStart() { return false; }
     virtual bool takeAudibleState(AudibleState &) { return false; }
     virtual std::optional<uint32_t> audibleElapsedMs(uint64_t) const { return std::nullopt; }
     // Queue promise, excluding any retained predecessor prefix. Used only to

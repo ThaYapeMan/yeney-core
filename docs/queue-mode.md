@@ -118,3 +118,8 @@ LMS can reuse exactly the same player stream URL for successive tracks. Stop/flu
 generation change, failure or an ended run permits a fresh start; changed source,
 seek or processing parameters remain normal starts. This narrowly scopes request
 identity to the queue capability and never changes stream handling.
+
+Managed sinks can resume the most recently received `strm s` through
+`takeQueueStart()`. The core retains its request bytes and starts that request
+locally after host readiness/selection; it never asks LMS for another start.
+The default callback is false and ordinary stream sinks retain their wire path.
