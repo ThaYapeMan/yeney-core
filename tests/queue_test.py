@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Queue-only mixer accounting and decode/audible protocol separation."""
 import os
+import time
 import struct
 import io
 import wave
@@ -91,21 +92,27 @@ class QueueTests(unittest.TestCase):
         with Session(mode='queue') as s:
             SongQueue(s.lms, [(s.source(empty), dict(fmt='l')),
                               (s.source(struct.pack('<hh', 31, -31)*1600), dict(rate=8000))])
+            model = s.lms.song_queue
+            s.lms.wait('DSCO'); time.sleep(.05); s.lms.timer()
+            self.assertFalse(any(p.get('event') == 'STMn' for p in s.lms.packets))
+            model.advance() # host fault policy, not StreamingFailed for received bytes
             s.lms.wait('STMu', timeout=6)
             self.assertEqual([p['playing_occurrence'] for p in s.lms.packets if p.get('event') == 'STMs'], [2])
-            self.assertEqual(sum(p.get('event') == 'STMn' for p in s.lms.packets), 1)
+            self.assertEqual(sum(p.get('event') == 'STMn' for p in s.lms.packets), 0)
             self.assertEqual(len(s.data()), 1600*8)
         print('PASS empty MP4 source: no silence-only promise or STMs; successor is the first audible occurrence')
         # Start immediately after HELO, fault with retained decoded PCM, then
-        # successor / owner flush / replacement. A fault must drain before STMn.
+        # successor / owner flush / replacement. Received audio must never be reported as STMn.
         with Session(mode='queue') as s:
             raw = struct.pack('<hh', 17, -17)*2400 + b'x'
             model = SongQueue(s.lms, [(s.source(raw), dict(rate=8000)),
                                       (s.source(struct.pack('<hh', 23, -23)*2400), dict(rate=8000))])
-            failed = s.lms.wait('STMn', timeout=6)
+            s.lms.wait('DSCO'); s.lms.wait('STMs'); time.sleep(.4); s.lms.timer()
+            self.assertFalse(any(p.get('event') == 'STMn' for p in s.lms.packets))
+            model.advance()
             starts = [p for p in s.lms.packets if p.get('event') == 'STMs']
             self.assertEqual([p['playing_occurrence'] for p in starts], [1])
-            self.assertGreater(failed['time'] - starts[0]['time'], .25)
+            self.assertIn('fault-tail-drained ', s.base.with_suffix('.events').read_text())
             s.lms.song_queue = None
             s.lms.wait('RESP')
             s.lms.strm('f'); s.lms.wait('STMf')
@@ -114,7 +121,7 @@ class QueueTests(unittest.TestCase):
             self.assertEqual([p['playing_occurrence'] for p in s.lms.packets if p.get('event') == 'STMs'], [1,3])
             self.assertEqual(model.playing, 3)
         print('PASS queue ALAC: regular trailing box, rewritten seek mdat, exact remaining count and bounded source-short padding')
-        print('PASS fact-E recovery: HELO start, drain old PCM before STMn, successor, flush, replacement; no empty or stale STMs')
+        print('PASS fact-E recovery: HELO start, drain old PCM without STMn, host-directed successor, flush, replacement; no empty or stale STMs')
 
     def test_pcm_exact_counts(self):
         n=1600

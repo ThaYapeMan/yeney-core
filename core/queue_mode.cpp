@@ -48,8 +48,21 @@ void QueueMode::itemEnd(const std::shared_ptr<Track> &t, uint64_t next, uint64_t
     sink.resolvedItemBoundary({t->descriptor.occurrence, next, p.submitted, overlapFrames, reason});
 }
 void QueueMode::reportDecoded(Track &t) {
-    if (!t.decoded || t.failed || t.doneReported || (sink.decodeAhead() && !t.startReported))
+    if (!t.decoded || t.failed || t.doneReported ||
+        (sink.decodeAhead() && (!t.startReported || selectionPending)))
         return;
+    if (sink.decodeAhead()) {
+        if (round <= t.startRound)
+            return; // put STMs on the wire one event-loop round before STMd
+        if (sink.speakerDriven() && cfg.queueRemoteSource && cfg.queueRemoteSource(t.descriptor.occurrence)) {
+            const auto total = sink.committedItemFrames(t.descriptor.occurrence).value_or(t.produced);
+            const auto audible = sink.audibleFrames();
+            const auto played = audible > t.first ? audible - t.first : 0;
+            const auto left = total > played ? total - played : 0;
+            if (left * 1000 >= uint64_t(cfg.queueNextDelayMs) * t.format.rate)
+                return;
+        }
+    }
     t.doneReported = true;
     if (sink.decodeAhead() && sink.speakerDriven())
         ++nextStartCredits;
@@ -81,24 +94,35 @@ bool QueueMode::audibleEvents() {
     auto &p = state;
     if (!sink.decodeAhead())
         return false;
+    if (cachedConnectionPending)
+        return true; // RESP must reach LMS before a cached speaker start
     // History keeps track identity/timing, not decoder or PCM buffers.
     for (auto &entry : retainedTracks)
         if (entry.second != p.fetching && entry.second->decoded && entry.second->output.empty())
             entry.second->decoder.reset();
+    bool freshStart = false;
     AudibleStart signal;
     while (sink.takeAudibleStart(signal)) {
         auto retained = retainedTracks.find(signal.occurrence);
         if (sink.speakerDriven() && signal.confirmed && retained != retainedTracks.end() &&
             retained->second->first == signal.frame && retained->second->played) {
-            if (p.audible == retained->second)
+            if (p.audible == retained->second && !selectionPending)
                 continue;
+            if (selectionPending)
+                retained->second->doneReported = false;
+            selectionPending = false;
+            p.playing = true;
+            p.paused = p.ended = false;
             p.audible = retained->second;
             auto pending = std::find(p.boundaries.begin(), p.boundaries.end(), p.audible);
             if (pending != p.boundaries.end())
                 p.boundaries.erase(p.boundaries.begin(), std::next(pending));
+            p.audible->clockOriginMs = sink.audibleElapsedMs(signal.occurrence).value_or(0);
+            freshStart = true;
             stat("STMs");
             sink.coreEvent("STMs", signal.occurrence, signal.frame);
             p.audible->startReported = true;
+            p.audible->startRound = round;
             p.audible->audibleAt = jiffies();
             reportDecoded(*p.audible);
             continue;
@@ -112,14 +136,25 @@ bool QueueMode::audibleEvents() {
         }
         p.audible = *it;
         p.boundaries.erase(p.boundaries.begin(), std::next(it));
+        p.audible->clockOriginMs = sink.audibleElapsedMs(signal.occurrence).value_or(0);
+        freshStart = true;
         stat("STMs");
         sink.coreEvent("STMs", signal.occurrence, signal.frame);
         p.audible->startReported = true;
+        p.audible->startRound = round;
         p.audible->audibleAt = jiffies();
         reportDecoded(*p.audible);
     }
-    AudibleState state;
-    while (sink.speakerDriven() && sink.takeAudibleState(state)) {
+    std::vector<AudibleState> states;
+    AudibleState value;
+    while (sink.speakerDriven() && sink.takeAudibleState(value))
+        states.push_back(value);
+    for (size_t index = 0; index < states.size(); ++index) {
+        const auto &state = states[index];
+        if (freshStart && std::any_of(states.begin() + index + 1, states.end(), [&](const auto &later) {
+                return later.occurrence == state.occurrence;
+            }))
+            continue; // a confirmed new run supersedes its buffered old stop/pause
         if (!p.audible || state.occurrence != p.audible->descriptor.occurrence)
             continue;
         const bool wasPaused = p.paused;
@@ -140,10 +175,12 @@ bool QueueMode::audibleEvents() {
         }
     }
     while (!faults.empty() && faults.front()->end != UINT64_MAX && sink.drained(faults.front()->end)) {
-        stat("STMn");
-        sink.coreEvent("STMn", faults.front()->descriptor.occurrence, faults.front()->end);
+        // Received audio is a stream fault, never StreamingFailed/STMn.
+        sink.coreEvent("fault-tail-drained", faults.front()->descriptor.occurrence, faults.front()->end);
         faults.pop_front();
     }
+    if (p.audible)
+        reportDecoded(*p.audible);
     return true;
 }
 std::optional<size_t> QueueMode::outputCapacity() const {
@@ -153,13 +190,19 @@ std::optional<size_t> QueueMode::outputCapacity() const {
 }
 std::optional<uint32_t> QueueMode::elapsed() const {
     auto &p = state;
-    if (sink.decodeAhead() && sink.speakerDriven())
-        return sink.audibleElapsedMs(p.audible->descriptor.occurrence);
+    if (sink.decodeAhead() && sink.speakerDriven()) {
+        auto ms = sink.audibleElapsedMs(p.audible->descriptor.occurrence);
+        if (ms && cfg.queueRelativeClock)
+            *ms = *ms >= p.audible->clockOriginMs ? *ms - p.audible->clockOriginMs : 0;
+        return ms;
+    }
     return {};
 }
 bool QueueMode::remoteClock() const { return sink.decodeAhead() && sink.speakerDriven(); }
 bool QueueMode::defersDecoderErrors() const { return sink.decodeAhead(); }
 void QueueMode::reset() {
+    selectionPending = cachedConnectionPending = false;
+    resumedAcknowledged = receivedAcknowledged = false;
     retainedTracks.clear();
     faults.clear();
     lastItem.reset();
@@ -203,14 +246,25 @@ void QueueMode::configureDecoder(Track &t, DecoderConfig &c) {
     c.transcoded = cfg.sourceIsTranscoded && cfg.sourceIsTranscoded(t.descriptor.occurrence);
 }
 void QueueMode::receivedStartCommand(const Bytes &request) {
-    if (sink.playbackGeneration() || sink.decodeAhead())
+    if (sink.playbackGeneration() || sink.decodeAhead()) {
         receivedStart = request;
+        receivedAcknowledged = false;
+    }
 }
 Bytes QueueMode::takeStart() {
-    if (sink.takeQueueStart())
+    if (sink.takeQueueStart()) {
+        resumedAcknowledged = receivedAcknowledged;
+        selectionPending = cachedConnectionPending = false;
+        return std::exchange(receivedStart, {});
+    }
+    return {};
+}
+Bytes QueueMode::takeCachedStart() {
+    if (sink.takeQueueCachedStart())
         return std::exchange(receivedStart, {});
     return {};
 }
+bool QueueMode::resumedStartAck() { return std::exchange(resumedAcknowledged, false); }
 bool QueueMode::repeatedStart(const Bytes &request) {
     if (!sink.decodeAhead() || !sink.speakerDriven() || request.size() <= 28)
         return false;
@@ -236,7 +290,24 @@ void QueueMode::commandObserved(char c) {
 }
 bool QueueMode::remoteCommand(char c, uint32_t value) {
     if (sink.decodeAhead() && sink.speakerDriven() && sink.queueCommand(c, value)) {
-        if (c == 'q' || c == 'f')
+        if (c == 'q') {
+            state.playing = state.paused = state.userPaused = false;
+            state.ended = true;
+        }
+        if (c == 'u') {
+            // Autostart=0 must release PCM production; the speaker still
+            // supplies every audible start/state acknowledgement.
+            state.playing = true;
+            state.paused = state.userPaused = false;
+            state.wake = 0;
+        }
+        if (c == 's') {
+            // Cached audio still starts a new LMS streaming run. Acknowledge
+            // its connection before a speaker STMs, without decoding it again.
+            stat("STMf");
+            stat("STMc");
+            receivedAcknowledged = selectionPending = cachedConnectionPending = true;
+        } else if (c == 'q' || c == 'f')
             stat("STMf");
         return true;
     }
@@ -276,6 +347,7 @@ bool QueueMode::beforeStart() {
     return true;
 }
 void QueueMode::startTrack(Track &t) {
+    selectionPending = false;
     auto &p = state;
     t.descriptor.occurrence = ++occurrence;
     if (sink.decodeAhead())
@@ -400,6 +472,7 @@ bool QueueMode::mayDrain() const {
 }
 void QueueMode::beginRun() { modeGeneration = sink.playbackGeneration(); }
 void QueueMode::pollGeneration() {
+    ++round;
     const auto mode = sink.playbackGeneration();
     if (mode != modeGeneration) {
         lastStart.clear();

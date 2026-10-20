@@ -28,7 +28,8 @@ struct PlaybackBuffer {
 struct QueueTrackState {
     TrackDescriptor descriptor;
     bool described = false, itemEnded = false, startReported = false, doneReported = false, failed = false;
-    uint32_t decodedAt = 0, audibleAt = 0;
+    uint32_t decodedAt = 0, audibleAt = 0, clockOriginMs = 0;
+    uint64_t startRound = 0;
 };
 // Internal policy hooks. Sink capability is queried at the original call sites,
 // never cached: a room generation handoff can select a different sink at runtime.
@@ -47,7 +48,9 @@ public:
 private:
     Hooks hooks;
     Bytes lastStart, receivedStart;
-    uint64_t nextStartCredits = 0;
+    bool selectionPending = false, resumedAcknowledged = false, receivedAcknowledged = false;
+    bool cachedConnectionPending = false;
+    uint64_t nextStartCredits = 0, round = 0;
     uint64_t occurrence = 0, transitionOverlap = 0, modeGeneration = 0;
     std::string transitionReason = "gapless";
     std::shared_ptr<Track> lastItem;
@@ -76,7 +79,11 @@ public:
     void commandObserved(char);
     bool repeatedStart(const Bytes &);
     void receivedStartCommand(const Bytes &);
+    bool deferStart() const { return cfg.deferQueueStart && cfg.deferQueueStart(); }
     Bytes takeStart();
+    Bytes takeCachedStart();
+    void cachedConnected() { cachedConnectionPending = false; }
+    bool resumedStartAck();
     bool remoteCommand(char, uint32_t);
     bool flush();
     bool beforeStart();

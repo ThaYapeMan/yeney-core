@@ -125,6 +125,7 @@ struct Player::Impl {
     uint32_t wake = 0;
     double credit = 0;
     uint64_t received = 0, skip = 0, bodyReceived = 0;
+    bool cachedRun = false;
     uint64_t contentLength = std::numeric_limits<uint64_t>::max();
     std::string headers;
     bool controlConnecting = false, httpConnecting = false, haveHeaders = false, everConnected = false;
@@ -276,7 +277,7 @@ struct Player::Impl {
             fetching->decoded = true;
             fetching->decoder.reset();
         }
-        if (!queue.deferFault())
+        if (!queue.deferFault() && (!queue.defersDecoderErrors() || !received))
             stat("STMn");
         if (connectedStream)
             send("DSCO", Bytes{reason});
@@ -434,6 +435,8 @@ struct Player::Impl {
             queue.commandObserved(char(b[4]));
             if (cfg.observeCommand)
                 cfg.observeCommand({char(b[4]), value, playing && !paused && submittedSinceFlush});
+            if (b[4] == 's' && queue.deferStart())
+                return;
             if (queue.remoteCommand(char(b[4]), value))
                 return;
             switch (b[4]) {
@@ -505,6 +508,8 @@ struct Player::Impl {
             sink.power(power);
             log("aude");
         } else if (op == "cont" && n >= 9 && fetching) {
+            if (cachedRun)
+                return;
             if (be32(b.data() + 4)) {
                 failStream("ICY metadata not supported for PCM");
                 return;
@@ -512,6 +517,8 @@ struct Player::Impl {
             if (fetching->autostart >= 2)
                 fetching->autostart -= 2;
         } else if (op == "codc" && n >= 9 && fetching) {
+            if (cachedRun)
+                return;
             try {
                 format(*fetching, b.data() + 4);
             } catch (const std::exception &e) {
@@ -528,6 +535,7 @@ struct Player::Impl {
         }
     }
     void start(const Bytes &b) {
+        cachedRun = false;
         bool gapless = fetching && fetching->decoded && !ended;
         if (!queue.beforeStart() && fetching && !fetching->decoded)
             clear(true);
@@ -537,7 +545,9 @@ struct Player::Impl {
         contentLength = std::numeric_limits<uint64_t>::max();
         headers.clear();
         haveHeaders = false;
-        stat("STMf");
+        const bool acknowledged = queue.resumedStartAck();
+        if (!acknowledged)
+            stat("STMf");
         fetching = std::make_shared<Track>();
         auto &t = *fetching;
         queue.startTrack(t);
@@ -553,7 +563,8 @@ struct Player::Impl {
         underrun = false;
         output.push_back(fetching);
         // STMc must precede even decoder failure: LMS ignores status before it.
-        stat("STMc");
+        if (!acknowledged)
+            stat("STMc");
         try {
             if (t.transition > 4)
                 throw std::invalid_argument("unsupported transition type");
@@ -579,10 +590,31 @@ struct Player::Impl {
             failStream(e.what());
         }
     }
+    void startCached(const Bytes &b) {
+        queue.beforeStart();
+        stopStream();
+        cachedRun = true;
+        received = bodyReceived = 0;
+        contentLength = std::numeric_limits<uint64_t>::max();
+        headers.clear();
+        haveHeaders = false;
+        sockaddr_in addr = server;
+        addr.sin_port = htons(be16(b.data() + 22));
+        if (be32(b.data() + 24))
+            std::memcpy(&addr.sin_addr.s_addr, b.data() + 24, 4);
+        request.assign(b.begin() + 28, b.end());
+        try {
+            connectSocket(http, addr);
+            httpConnecting = true;
+            httpDeadline = jiffies() + 5000;
+        } catch (const std::exception &e) {
+            failStream(e.what());
+        }
+    }
     void eof() {
         http.reset();
         httpConnecting = false;
-        if (fetching)
+        if (fetching && !cachedRun)
             fetching->eof = true;
         send("DSCO", Bytes{0});
     }
@@ -663,6 +695,8 @@ struct Player::Impl {
                     return;
                 }
             }
+            if (cachedRun)
+                queue.cachedConnected();
         }
         size_t amount = std::min<uint64_t>(size_t(n) - offset, contentLength - bodyReceived);
         // Header reads are capped by ring capacity, leaving room for body bytes.
@@ -670,14 +704,15 @@ struct Player::Impl {
             failStream("HTTP body exceeded input capacity");
             return;
         }
-        input.push(b + offset, amount);
+        if (!cachedRun)
+            input.push(b + offset, amount);
         received += amount;
         bodyReceived += amount;
         if (bodyReceived == contentLength)
             eof();
     }
     void decode() {
-        if (!fetching || fetching->decoded || !haveHeaders)
+        if (cachedRun || !fetching || fetching->decoded || !haveHeaders)
             return;
         auto &t = *fetching;
         if (t.autostart >= 2 || !t.decoder)
@@ -970,6 +1005,8 @@ struct Player::Impl {
             controlStep(now);
             if (auto pending = queue.takeStart(); !pending.empty())
                 start(pending);
+            if (auto cached = queue.takeCachedStart(); !cached.empty())
+                startCached(cached);
             if (control.fd >= 0 && !controlConnecting) {
                 httpStep(now);
                 decode();

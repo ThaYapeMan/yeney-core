@@ -30,8 +30,9 @@ with tempfile.TemporaryDirectory(prefix='yeney-speaker-') as folder:
         print('PASS repeated queue start while preparing: identical request retains one producer, no duplicate STMc, no premature STMs/STMd or HELO')
         assert not any(p.get('event') in ('STMs','STMd') for p in lms.packets)
         state(0,'r')
-        assert lms.wait('STMs')['elapsed'] == 1
-        lms.wait('STMd')
+        started = lms.wait('STMs'); assert started['elapsed'] == 1
+        decoded = lms.wait('STMd')
+        assert decoded['jiffies'] > started['jiffies'], (started, decoded)
         # Real LMS can serve every item from an identical player stream URL.
         # Reuse this listening endpoint and the exact strm request for item two.
         source.thread.join(1);assert not source.thread.is_alive()

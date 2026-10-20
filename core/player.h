@@ -24,6 +24,12 @@ struct Config {
     double futurePcmSeconds = 30.0;
     std::function<std::optional<FlacSourceInfo>(uint64_t, std::optional<FlacSourceInfo>)> flacSourceInfo;
     unsigned queueStartupMs = 15000;
+    // Managed finite queues delay remote successor admission until near the
+    // speaker-confirmed end. No effect on ordinary stream sinks.
+    unsigned queueNextDelayMs = 20000;
+    bool queueRelativeClock = false; // LMS adds its selected seek offset itself
+    std::function<bool(uint64_t)> queueRemoteSource;
+    std::function<bool()> deferQueueStart; // host mode choice; retain the received request
     std::function<bool(uint64_t)> sourceIsTranscoded;
     // Optional host-provided smart rule; strm itself contains no album identity.
     std::function<bool(uint64_t, uint64_t)> smartSameAlbum;

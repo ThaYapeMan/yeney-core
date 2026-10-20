@@ -123,3 +123,24 @@ Managed sinks can resume the most recently received `strm s` through
 `takeQueueStart()`. The core retains its request bytes and starts that request
 locally after host readiness/selection; it never asks LMS for another start.
 The default callback is false and ordinary stream sinks retain their wire path.
+
+Queue status reporting follows LMS's separate Started and StreamingComplete
+states. `startRound` fences STMd to a later event-loop round than STMs. Managed
+remote sources additionally wait for speaker-frame remaining time below
+`Config::queueNextDelayMs` (20 seconds), after decode completion. The bridge
+classifies sources with `queueRemoteSource`; default sinks do not use this gate.
+A source fault with any received audio bytes never emits STMn. Produced PCM
+still drains and emits the internal `fault-tail-drained` observation; only an
+empty source is reported as LMS StreamingFailed. Fault tests explicitly direct
+the subsequent source rather than using an incorrect partial-audio STMn.
+
+Cached selections acknowledge a new LMS run with STMc and an actual nonblocking
+HTTP/RESP handshake, discarding the encoded body without opening a decoder or
+allocating another PCM occurrence. Speaker evidence remains gated until RESP;
+STMs then precedes STMd by one event-loop round. `takeQueueCachedStart()` defaults
+to false. `deferQueueStart` lets managed mode readiness retain a received start
+before any stream output, then resume it once through `takeQueueStart()`.
+Autostart-zero `u` releases PCM production without inventing STMr or audibility.
+Managed `queueRelativeClock` reports elapsed since the run's confirmed source
+origin: LMS adds its seek offset, so the core must not add that offset again.
+All new callbacks/options are inert for normal stream and SHM sinks.
