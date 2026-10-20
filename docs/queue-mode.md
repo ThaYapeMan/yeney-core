@@ -44,9 +44,8 @@ HTTP Range recovery remain host concerns; no Range-to-seek inference is added.
 `queue_mode.h/.cpp` owns queue state and policy. `playback_state.h` contains only
 the private track/mixer data types used by both the shared player and policy.
 `PlaybackBuffer` is a non-owning reference view of audio/control state; it
-exposes no sockets, HTTP headers, parser or outbound protocol buffer. The four
-callbacks permit existing logging, STAT reporting, clear and capability
-publication. It introduces no thread, buffer, timer or new I/O path.
+exposes no sockets, HTTP headers, parser or outbound protocol buffer. The three
+callbacks permit logging, STAT reporting and internal clear. It introduces no thread, buffer, timer or new I/O path.
 
 Hooks follow the existing lifecycle stages: configuration/start, commands,
 decode, boundary/overlap/output, speaker evidence, clear and generation handoff.
@@ -96,3 +95,26 @@ from 1247 to 987. New internal files are `queue_mode.h` (100), `queue_mode.cpp`
 (380), `playback_state.h` (30), `queue_decode.h` (36), `queue_decode.cpp` (62),
 and `queue_flac_origin.h` (57). The extra interface and inventory comments favor
 explicit ownership over minimizing the total source line count.
+
+## Same-connection rearm correction (20 October 2026)
+
+The historical extraction preserved a generation-triggered capability HELO.
+That behavior was incorrect: LMS interprets HELO as a reconnect and restarts its
+current playlist item with strm q/s, which can recursively rearm the room.
+Generation polling now only resets producer/decoder/PCM state and acknowledges
+`playbackReady`; it sends no protocol announcement. HELO belongs exclusively to
+genuine connection establishment, including its startup capability selection.
+
+The common fake LMS now responds to an extra connected-player HELO while playing
+with q/s and a fresh HTTP source for the audible/current item. The generation
+test asserts exactly one connection HELO while preserving reset-before-ready and
+no stale start/advance. A separate oracle test proves the fake actually performs
+the reconnect reaction; no queue test opts out of it.
+
+An identical queue/speaker strm s request (including HTTP endpoint, request and
+format) is idempotent while its producer occurrence is still valid and no STMd
+has requested another source. Each STMd grants a successor-start credit: real
+LMS can reuse exactly the same player stream URL for successive tracks. Stop/flush,
+generation change, failure or an ended run permits a fresh start; changed source,
+seek or processing parameters remain normal starts. This narrowly scopes request
+identity to the queue capability and never changes stream handling.

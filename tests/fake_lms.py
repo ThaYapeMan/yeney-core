@@ -107,12 +107,18 @@ class LMS:
         self.rebuffer_commands = []
         self.rebuffer_timers = []
         self.song_queue = None
+        self.connection_hellos = 0
+        self.playlist_playing = False
+        self.current_start = None
+        self.reconnect_sources = []
+        self.reconnect_replays = 0
 
     def accept(self):
         if self.connection:
             self.connection.close()
         self.connection, _ = self.listener.accept()
         self.connection.settimeout(5)
+        self.connection_hellos = 0
         return self.read()
 
     def exact(self, n, eof_ok=False):
@@ -159,6 +165,19 @@ class LMS:
         return p
 
     def react(self, packet):
+        if packet['op'] == 'HELO':
+            self.connection_hellos += 1
+            if self.connection_hellos > 1 and self.playlist_playing and self.current_start:
+                source, options = self.current_start
+                # Real LMS treats a new HELO as a reconnect, even on the same
+                # socket. Replay the current song through a fresh HTTP source.
+                if self.song_queue is not None and self.song_queue.prepared_sources:
+                    source, options = self.song_queue.current_source()
+                fresh = HTTP(source.body)
+                self.reconnect_sources.append(fresh)
+                self.reconnect_replays += 1
+                self.strm('q')
+                self.strm('s', fresh, **options)
         if self.song_queue is not None:
             self.song_queue.react(packet)
         # Opt-in LMS output-underrun reaction: pause immediately, then unpause
@@ -191,6 +210,12 @@ class LMS:
             self.connection.sendall(frame)
 
     def strm(self, command, http=None, rate=44100, bits=16, channels=2, big=False, autostart=1, value=0, fmt='p', threshold=0, out_threshold=0, unknown=False, gain=0, transition=0, period=0):
+        if command in ('q','p'):
+            self.playlist_playing = False
+        elif command in ('s','u'):
+            self.playlist_playing = True
+        if command == 's' and http is not None:
+            self.current_start = (http, dict(rate=rate,bits=bits,channels=channels,big=big,autostart=autostart,value=value,fmt=fmt,threshold=threshold,out_threshold=out_threshold,unknown=unknown,gain=gain,transition=transition,period=period))
         rates = {44100: '3', 48000: '4', 8000: '5', 192000: '<'}
         params = b'????' if unknown else (str(bits // 8 - 1) + rates[rate] + str(channels) + ('0' if big else '1')).encode()
         body = command.encode() + str(autostart).encode() + fmt.encode() + params + bytes([threshold, 0, period, ord('0') + transition, 0, out_threshold, 0])
@@ -212,6 +237,8 @@ class LMS:
         if self.connection:
             self.connection.close()
         self.listener.close()
+        for source in self.reconnect_sources:
+            source.close()
 
 
 class SongQueue:
@@ -224,6 +251,8 @@ class SongQueue:
         self.lms, self.sources = lms, iter(sources)
         self.streaming = self.playing = first - 1
         self.ready = False
+        self.prepared_sources = {}
+        self.replaying = False
         lms.song_queue = self
         self.advance()
 
@@ -231,12 +260,27 @@ class SongQueue:
         if self.streaming - self.playing >= 2:
             self.ready = True
             return
-        source = next(self.sources, None)
+        target = self.streaming + 1
+        if self.replaying and target in self.prepared_sources:
+            original, options = self.prepared_sources[target]
+            source = HTTP(original.body), options
+            self.lms.reconnect_sources.append(source[0])
+        else:
+            self.replaying = False
+            source = next(self.sources, None)
         if source is not None:
             http, options = source
-            self.streaming += 1
+            self.streaming = target
+            self.prepared_sources[self.streaming] = (http, options)
             self.ready = False
             self.lms.strm('s', http, **options)
+
+    def current_source(self):
+        current = self.playing if self.playing in self.prepared_sources else min(self.prepared_sources)
+        self.streaming = current
+        self.ready = False
+        self.replaying = True
+        return self.prepared_sources[current]
 
     def react(self, packet):
         event = packet.get('event')

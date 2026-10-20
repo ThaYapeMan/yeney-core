@@ -140,11 +140,7 @@ struct Player::Impl {
                 {reservedWindow, overlap, output, boundaries, fetching, audible, queued, submitted, paused,
                  playing, userPaused, ended, wake, credit},
                 {[this](const auto &s) { log(s); }, [this](const auto &s) { stat(s); },
-                 [this] { clear(true); },
-                 [this] {
-                     if (control.fd >= 0 && !controlConnecting)
-                         send("HELO", hello(cfg.mac, true, received, sink.maxSampleRate()));
-                 }}) {
+                 [this] { clear(true); }}) {
         if (cfg.streamBytes < 8 || cfg.outputFrames < 256 || cfg.streamBytes > UINT32_MAX ||
             cfg.outputFrames > UINT32_MAX / 8 - Decoder::outputCapacity ||
             cfg.transitionMaxFrames > (UINT32_MAX / 8 - cfg.outputFrames - Decoder::outputCapacity) / 2)
@@ -483,6 +479,8 @@ struct Player::Impl {
                 }
                 break;
             case 's':
+                if (queue.repeatedStart(b))
+                    break;
                 start(b);
                 break;
             default:

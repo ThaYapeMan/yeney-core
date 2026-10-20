@@ -50,6 +50,8 @@ void QueueMode::reportDecoded(Track &t) {
     if (!t.decoded || t.failed || t.doneReported || (sink.decodeAhead() && !t.startReported))
         return;
     t.doneReported = true;
+    if (sink.decodeAhead() && sink.speakerDriven())
+        ++nextStartCredits;
     stat("STMd");
     if (sink.decodeAhead())
         sink.coreEvent("STMd", t.descriptor.occurrence, t.produced);
@@ -199,7 +201,26 @@ void QueueMode::configureDecoder(Track &t, DecoderConfig &c) {
     }
     c.transcoded = cfg.sourceIsTranscoded && cfg.sourceIsTranscoded(t.descriptor.occurrence);
 }
+bool QueueMode::repeatedStart(const Bytes &request) {
+    if (!sink.decodeAhead() || !sink.speakerDriven() || request.size() <= 28)
+        return false;
+    // LMS may reuse the exact HTTP endpoint/request for every song. Each
+    // STMd authorizes a successor, even when its wire request is identical.
+    const bool successor = nextStartCredits != 0;
+    if (successor)
+        --nextStartCredits;
+    const bool repeat =
+        !successor && request == lastStart && !state.ended && state.fetching && !state.fetching->failed;
+    lastStart = request;
+    if (repeat)
+        log("queue repeated strm s: existing occurrence retained");
+    return repeat;
+}
 void QueueMode::commandObserved(char c) {
+    if (c == 'q' || c == 'f') {
+        lastStart.clear();
+        nextStartCredits = 0;
+    }
     if (sink.decodeAhead())
         log("queue command strm " + std::string(1, c));
 }
@@ -371,9 +392,10 @@ void QueueMode::beginRun() { modeGeneration = sink.playbackGeneration(); }
 void QueueMode::pollGeneration() {
     const auto mode = sink.playbackGeneration();
     if (mode != modeGeneration) {
+        lastStart.clear();
+        nextStartCredits = 0;
         hooks.reset();
         modeGeneration = mode;
-        hooks.capabilities();
         sink.playbackReady(mode);
     }
 }

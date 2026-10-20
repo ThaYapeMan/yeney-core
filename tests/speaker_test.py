@@ -7,6 +7,7 @@ import struct
 import subprocess
 import tempfile
 import time
+import threading
 from fake_lms import LMS, HTTP, ROOT
 with tempfile.TemporaryDirectory(prefix='yeney-speaker-') as folder:
     path = Path(folder)/'state'
@@ -22,10 +23,22 @@ with tempfile.TemporaryDirectory(prefix='yeney-speaker-') as folder:
         lms.accept()
         lms.strm('s', source, rate=8000)
         lms.wait('DSCO')
+        lms.strm('s',source,rate=8000)
+        lms.timer()
+        assert sum(p.get('event')=='STMc' for p in lms.packets)==1,lms.packets
+        assert sum(p['op']=='HELO' for p in lms.packets)==1,lms.packets
+        print('PASS repeated queue start while preparing: identical request retains one producer, no duplicate STMc, no premature STMs/STMd or HELO')
         assert not any(p.get('event') in ('STMs','STMd') for p in lms.packets)
         state(0,'r')
         assert lms.wait('STMs')['elapsed'] == 1
         lms.wait('STMd')
+        # Real LMS can serve every item from an identical player stream URL.
+        # Reuse this listening endpoint and the exact strm request for item two.
+        source.thread.join(1);assert not source.thread.is_alive()
+        source.thread=threading.Thread(target=source.run,daemon=True);source.thread.start()
+        lms.strm('s',source,rate=8000);lms.wait('RESP');lms.wait('DSCO')
+        assert sum(p.get('event')=='STMc' for p in lms.packets)==2,lms.packets
+        print('PASS queue same-URL successor: STMd authorizes a new producer with identical strm/HTTP bytes; no false duplicate suppression')
         assert lms.timer()['elapsed'] == 1
         state(100,'r'); time.sleep(.04)
         assert lms.timer()['elapsed'] == 100
@@ -76,8 +89,8 @@ with tempfile.TemporaryDirectory(prefix='yeney-refetch-') as folder:
             for source in sources: source.close()
             assert proc.returncode == 0
 
-# Opt-in generation handoff discards the old producer and advertises the stream
-# capability before the room asks LMS for a continuation. Default fixtures above
+# Internal generation handoff discards the old producer without announcing a
+# reconnect to LMS. Capabilities belong to the connection. Default fixtures above
 # use generation zero and retain their existing protocol transcripts.
 with tempfile.TemporaryDirectory(prefix='yeney-mode-') as folder:
     path = Path(folder)/'state'
@@ -91,7 +104,7 @@ with tempfile.TemporaryDirectory(prefix='yeney-mode-') as folder:
             lms.accept(); lms.strm('s',source,rate=8000); lms.wait('RESP')
             path.write_text('1 0 r\n'); lms.wait('STMs')
             before = Path(log.name).read_text().count('FLUSH')
-            generation.write_text('2'); hello=lms.wait('HELO'); assert b'MaxSampleRate=48000' in hello['body'],hello
+            generation.write_text('2')
             end=time.monotonic()+3
             while 'MODE READY 2' not in Path(log.name).read_text() and time.monotonic()<end: time.sleep(.01)
             text=Path(log.name).read_text()
@@ -101,13 +114,52 @@ with tempfile.TemporaryDirectory(prefix='yeney-mode-') as folder:
             count=len([p for p in lms.packets if p.get('event') in ('STMs','STMd')])
             time.sleep(.1);lms.timer()
             assert len([p for p in lms.packets if p.get('event') in ('STMs','STMd')])==count
+            assert sum(p['op']=='HELO' for p in lms.packets)==1,lms.packets
             continuation = HTTP(struct.pack('<hh',200,-200)*8000)
             try:
                 lms.strm('s',continuation,rate=8000)
                 lms.wait('STMs'); lms.wait('STMu')
                 assert len([p for p in lms.packets if p.get('event') == 'STMs']) == 2
             finally: continuation.close()
-            print('PASS mode generation core: producer/decoder/PCM reset before readiness, one capability HELO, no late queue start/advance; default generation-zero fixtures unchanged')
+            print('PASS mode generation core: producer/decoder/PCM reset before readiness, one connection HELO, no generation HELO, no late queue start/advance; default generation-zero fixtures unchanged')
         finally:
             proc.send_signal(signal.SIGTERM);proc.wait(3);lms.close();source.close()
             assert proc.returncode==0
+
+# The common fake must reproduce LMS's same-connection HELO restart policy.
+import socket
+from types import SimpleNamespace
+from fake_lms import SongQueue
+lms=LMS()
+peer=socket.create_connection(lms.listener.getsockname(),timeout=3)
+hello=b'HELO'+struct.pack('!I',36)+bytes(36)
+def command():
+    def exact(n):
+        data=b''
+        while len(data)<n:
+            part=peer.recv(n-len(data))
+            assert part,'fake peer closed before reconnect response'
+            data+=part
+        return data
+    n=struct.unpack('!H',exact(2))[0]
+    return exact(n)[4:5]
+try:
+    peer.sendall(hello);lms.accept()
+    songs=SongQueue(lms,[(SimpleNamespace(port=9,body=bytes(64)),dict(rate=8000)),(SimpleNamespace(port=9,body=b'x'*64),dict(rate=8000))])
+    assert command()==b's'
+    songs.react(dict(event='STMs'));songs.react(dict(event='STMd'))
+    assert command()==b's' # source two is decoding ahead of audible item one
+    peer.sendall(hello);lms.read()
+    assert command()==b'q' and command()==b's'
+    assert lms.reconnect_replays==1
+    assert lms.reconnect_sources[0].body==bytes(64)
+    songs.react(dict(event='STMd'))
+    assert command()==b's'
+    assert lms.reconnect_sources[1].body==b'x'*64
+    for fresh in lms.reconnect_sources:
+        with socket.create_connection(('127.0.0.1',fresh.port),timeout=3) as http:
+            http.sendall(b'GET /audio HTTP/1.0\r\n\r\n')
+            while http.recv(4096):pass
+    print('PASS fake LMS reconnect oracle: repeated connected-player HELO resends q/current-audible s, not decoder-ahead item; cached successor replayed with fresh audio')
+finally:
+    peer.close();lms.close()
