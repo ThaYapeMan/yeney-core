@@ -6,6 +6,7 @@
 
 #include "decoder.h"
 #include "mp4.h"
+#include "queue_decode.h"
 #include "ring.h"
 #include "sample_conversion.h"
 #include "third_party/alac/codec/ALACBitUtilities.h"
@@ -215,7 +216,7 @@ class PcmWorker : public Worker {
         uint64_t position = 0;
         while (true) {
             size_t used = 0;
-            if (cfg.finitePcmContainers && t.frames && position >= *t.frames)
+            if (detail::QueueDecodePolicy::payloadEnded(cfg, t.frames, position))
                 used = pending.size();
             while (pending.size() - used >= width) {
                 auto f = decodeFrame(pending.data() + used, t.format);
@@ -226,15 +227,14 @@ class PcmWorker : public Worker {
                 }
                 emit(f);
                 ++position;
-                if (cfg.finitePcmContainers && t.frames && position == *t.frames) {
+                if (detail::QueueDecodePolicy::payloadAtEnd(cfg, t.frames, position)) {
                     used = pending.size();
                     break;
                 }
             }
             pending.erase(pending.begin(), pending.begin() + used);
             if (end) {
-                if (cfg.finitePcmContainers && t.frames && position != *t.frames)
-                    throw std::runtime_error("truncated PCM container payload");
+                detail::QueueDecodePolicy::finishPayload(cfg, t.frames, position);
                 if (!pending.empty())
                     throw std::runtime_error("partial PCM frame at EOF");
                 break;
@@ -369,17 +369,13 @@ bool PcmWorker::containerHeader(Track &t) {
 class FlacWorker : public Worker {
     std::string callbackError;
     bool hadFrame = false;
-    uint64_t sourceTotal = 0;
-    unsigned sourceBlockSize = 0;
-    Bytes firstBytes;
+    detail::QueueFlacSource source;
     static FLAC__StreamDecoderReadStatus readCb(const FLAC__StreamDecoder *, FLAC__byte *bytes, size_t *n,
                                                 void *self) {
         try {
             auto &w = *static_cast<FlacWorker *>(self);
             *n = w.read(bytes, *n);
-            if (w.cfg.finitePcmContainers && w.cfg.flacSourceInfo && w.firstBytes.size() < 64)
-                w.firstBytes.insert(w.firstBytes.end(), bytes,
-                                    bytes + std::min(*n, 64 - w.firstBytes.size()));
+            w.source.capture(w.cfg, bytes, *n);
             return *n ? FLAC__STREAM_DECODER_READ_STATUS_CONTINUE
                       : FLAC__STREAM_DECODER_READ_STATUS_END_OF_STREAM;
         } catch (...) {
@@ -393,43 +389,12 @@ class FlacWorker : public Worker {
             Format format{f->header.sample_rate, f->header.bits_per_sample, f->header.channels, false};
             if (format.bits != 16 && format.bits != 24)
                 throw std::runtime_error("FLAC requires 16 or 24 bits");
-            std::optional<FlacFrameOrigin> rawOrigin;
-            if (!w.hadFrame && w.cfg.finitePcmContainers && w.cfg.flacSourceInfo) {
-                std::optional<FlacSourceInfo> info;
-                if (w.sourceTotal)
-                    info = FlacSourceInfo{w.sourceTotal, w.sourceBlockSize};
-                else
-                    rawOrigin = flacFrameOrigin(w.firstBytes.data(), w.firstBytes.size());
-                if (!info && !rawOrigin && w.cfg.flacLog)
-                    w.cfg.flacLog("sealed fallback: first frame source number unavailable");
-                // Never turn uncertain sync scanning into an exact promise.
-                if (info || rawOrigin) {
-                    info = w.cfg.flacSourceInfo(info);
-                    if (info) {
-                        w.sourceTotal = info->totalSamples;
-                        w.sourceBlockSize = info->fixedBlockSize;
-                    }
-                }
-            }
-            if (!w.hadFrame && w.sourceTotal) {
-                const uint64_t origin =
-                    rawOrigin
-                        ? (rawOrigin->variable ? rawOrigin->number : rawOrigin->number * w.sourceBlockSize)
-                    : f->header.number_type == FLAC__FRAME_NUMBER_TYPE_SAMPLE_NUMBER
-                        ? f->header.number.sample_number
-                        : uint64_t(f->header.number.frame_number) * w.sourceBlockSize;
-                if (origin > w.sourceTotal || (rawOrigin && !rawOrigin->variable && !w.sourceBlockSize)) {
-                    if (w.cfg.finitePcmContainers && w.cfg.flacSourceInfo) {
-                        if (w.cfg.flacLog)
-                            w.cfg.flacLog("sealed fallback: invalid source count/origin");
-                    } else
-                        throw std::runtime_error("FLAC seek origin exceeds source count");
-                } else {
-                    w.setExactFrames(w.sourceTotal - origin);
-                    if (w.cfg.flacLog)
-                        w.cfg.flacLog("exact remaining=" + std::to_string(w.sourceTotal - origin) +
-                                      " first sample=" + std::to_string(origin));
-                }
+            if (!w.hadFrame) {
+                const bool sampleNumber = f->header.number_type == FLAC__FRAME_NUMBER_TYPE_SAMPLE_NUMBER;
+                const auto number =
+                    sampleNumber ? f->header.number.sample_number : f->header.number.frame_number;
+                w.source.resolve(w.cfg, sampleNumber, number,
+                                 [&w](uint64_t frames) { w.setExactFrames(frames); });
             }
             w.setFormat(format);
             w.hadFrame = true;
@@ -446,8 +411,7 @@ class FlacWorker : public Worker {
     static void metadataCb(const FLAC__StreamDecoder *, const FLAC__StreamMetadata *m, void *self) {
         if (m->type == FLAC__METADATA_TYPE_STREAMINFO && m->data.stream_info.total_samples) {
             auto &w = *static_cast<FlacWorker *>(self);
-            w.sourceTotal = m->data.stream_info.total_samples;
-            w.sourceBlockSize = m->data.stream_info.max_blocksize;
+            w.source.metadata(m->data.stream_info.total_samples, m->data.stream_info.max_blocksize);
         }
     }
     static void errorCb(const FLAC__StreamDecoder *, FLAC__StreamDecoderErrorStatus status, void *self) {
@@ -659,7 +623,7 @@ class AlacWorker : public Worker {
                         emit(decodeFrame(output.data() + size_t(i) * info.format.channels * (storageBits / 8),
                                          storage));
             },
-            cfg.earlyMediaCap, cfg.finitePcmContainers);
+            cfg.earlyMediaCap, detail::QueueDecodePolicy::allowPartialMp4(cfg));
         uint8_t bytes[8192];
         while (size_t n = read(bytes, sizeof(bytes)))
             demux.feed(bytes, n);

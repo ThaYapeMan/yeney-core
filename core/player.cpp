@@ -7,6 +7,7 @@
 #include "player.h"
 #include "decoder.h"
 #include "play_clock.h"
+#include "playback_state.h"
 #include "ring.h"
 #include "transitions.h"
 #include <algorithm>
@@ -93,6 +94,9 @@ bool sendBytes(int fd, Bytes &bytes) {
 }
 } // namespace
 struct Player::Impl {
+    using QueueMode = detail::QueueMode;
+    using Track = detail::PlaybackTrack;
+    using Overlap = detail::Overlap;
     Config cfg;
     Sink &sink;
     Socket control, http, discovery;
@@ -106,87 +110,46 @@ struct Player::Impl {
     ServerParser parser;
     Bytes outbound, request;
     Ring<uint8_t> input;
-    struct Track {
-        Format format;
-        TrackDescriptor descriptor;
-        bool described = false, itemEnded = false, startReported = false, doneReported = false,
-             failed = false;
-        uint32_t decodedAt = 0, audibleAt = 0;
-        std::unique_ptr<Decoder> decoder;
-        bool decoderFinished = false;
-        std::deque<Frame> output;
-        size_t threshold = 0, outputThreshold = 0;
-        int autostart = 1;
-        bool known = false, headerPcm = false, wave = false, ready = false, eof = false, decoded = false,
-             boundary = false, gapless = false;
-        uint64_t first = 0, end = UINT64_MAX, skipped = 0, played = 0, produced = 0;
-        uint32_t replayGain = 0;
-        unsigned transition = 0, period = 0;
-        uint64_t window = 0, outStart = 0, outLength = 0;
-        bool crossChecked = false;
-    };
-    struct Overlap {
-        std::shared_ptr<Track> old, next;
-        uint64_t length = 0, position = 0;
-    } overlap;
+    Overlap overlap;
     size_t reservedWindow = 0;
     size_t outputCapacity() const {
-        if (sink.decodeAhead())
-            return size_t(cfg.futurePcmSeconds * sink.maxSampleRate()) + cfg.transitionMaxFrames * 2;
+        if (auto capacity = queue.outputCapacity())
+            return *capacity;
         return cfg.outputFrames + reservedWindow * 2;
     }
-    double queuedSeconds() const {
-        double seconds = 0;
-        for (const auto &t : output)
-            seconds += double(t->output.size()) / t->format.rate;
-        return seconds;
-    }
-    double futureSeconds() const {
-        // Two bounded tail windows are mixer look-behind, not future PCM.
-        double reserve = 0;
-        unsigned count = 0;
-        for (const auto &t : output) {
-            if (++count > 2)
-                break;
-            reserve += double(std::min<uint64_t>(t->output.size(), cfg.transitionMaxFrames)) / t->format.rate;
-        }
-        return std::max(0.0, queuedSeconds() - reserve);
-    }
-    uint64_t occurrence = 0;
-    std::shared_ptr<Track> lastItem;
-    std::string transitionReason = "gapless";
-    uint64_t transitionOverlap = 0;
-    void itemEnd(const std::shared_ptr<Track> &t, uint64_t next, uint64_t overlapFrames,
-                 const std::string &reason) {
-        if (!sink.decodeAhead() || !t || t->itemEnded)
-            return;
-        log("queue item-end occurrence=" + std::to_string(t->descriptor.occurrence) + " reason=" + reason);
-        t->itemEnded = true;
-        t->end = submitted;
-        sink.resolvedItemBoundary({t->descriptor.occurrence, next, submitted, overlapFrames, reason});
-    }
     std::deque<std::shared_ptr<Track>> output, boundaries;
-    std::map<uint64_t, std::shared_ptr<Track>> retainedTracks;
     std::shared_ptr<Track> fetching, audible;
-    std::deque<std::shared_ptr<Track>> faults;
     size_t queued = 0;
-    uint64_t received = 0, submitted = 0, skip = 0, bodyReceived = 0;
+    uint64_t submitted = 0;
+    bool paused = false, playing = false, userPaused = false, ended = true;
+    uint32_t wake = 0;
+    double credit = 0;
+    uint64_t received = 0, skip = 0, bodyReceived = 0;
     uint64_t contentLength = std::numeric_limits<uint64_t>::max();
     std::string headers;
     bool controlConnecting = false, httpConnecting = false, haveHeaders = false, everConnected = false;
     bool submittedSinceFlush = false;
-    bool paused = false, playing = false, userPaused = false, ended = true, underrun = false, power = true;
-    uint32_t wake = 0, lastTick = 0, lastStat = 0, nextConnect = 0, connectDeadline = 0, httpDeadline = 0,
+    bool underrun = false, power = true;
+    uint32_t lastTick = 0, lastStat = 0, nextConnect = 0, connectDeadline = 0, httpDeadline = 0,
              nextDiscovery = 0;
     unsigned backoff = 100;
-    double credit = 0;
-    explicit Impl(Config c, Sink &s) : cfg(std::move(c)), sink(s), input(cfg.streamBytes) {
+    QueueMode queue;
+    explicit Impl(Config c, Sink &s)
+        : cfg(std::move(c)), sink(s), input(cfg.streamBytes),
+          queue(cfg, sink,
+                {reservedWindow, overlap, output, boundaries, fetching, audible, queued, submitted, paused,
+                 playing, userPaused, ended, wake, credit},
+                {[this](const auto &s) { log(s); }, [this](const auto &s) { stat(s); },
+                 [this] { clear(true); },
+                 [this] {
+                     if (control.fd >= 0 && !controlConnecting)
+                         send("HELO", hello(cfg.mac, true, received, sink.maxSampleRate()));
+                 }}) {
         if (cfg.streamBytes < 8 || cfg.outputFrames < 256 || cfg.streamBytes > UINT32_MAX ||
             cfg.outputFrames > UINT32_MAX / 8 - Decoder::outputCapacity ||
             cfg.transitionMaxFrames > (UINT32_MAX / 8 - cfg.outputFrames - Decoder::outputCapacity) / 2)
             throw std::invalid_argument("buffer size outside supported range");
-        if (!std::isfinite(cfg.futurePcmSeconds) || cfg.futurePcmSeconds < 1 || cfg.futurePcmSeconds > 600)
-            throw std::invalid_argument("invalid future PCM seconds");
+        queue.validate();
         submitted = sink.audibleFrames();
     }
     void log(const std::string &s) {
@@ -201,9 +164,8 @@ struct Player::Impl {
     uint32_t elapsed() const {
         if (!audible)
             return 0;
-        if (sink.decodeAhead() && sink.speakerDriven())
-            if (auto elapsed = sink.audibleElapsedMs(audible->descriptor.occurrence))
-                return *elapsed;
+        if (auto elapsed = queue.elapsed())
+            return *elapsed;
         return trackElapsedMs(sink.audibleFrames(), audible->first, audible->end, audible->skipped,
                               audible->format.rate);
     }
@@ -223,9 +185,8 @@ struct Player::Impl {
         // LMS returns early before interpolation when both elapsed fields are
         // zero. A network sink has already announced this audible gapless
         // boundary; keep interpolation seeded through immediate timer reports.
-        if (((cfg.startOnSubmit && audible && audible->gapless) ||
-             (sink.decodeAhead() && sink.speakerDriven())) &&
-            playing && !paused && audible && (event == "STMs" || event == "STMt") && !s.elapsed)
+        if (((cfg.startOnSubmit && audible && audible->gapless) || queue.remoteClock()) && playing &&
+            !paused && audible && (event == "STMs" || event == "STMt") && !s.elapsed)
             s.elapsed = 1;
         auto b = statusPacket(event, s, stamp);
         outbound.insert(outbound.end(), b.begin(), b.end());
@@ -245,9 +206,7 @@ struct Player::Impl {
         overlap = {};
         reservedWindow = 0;
         boundaries.clear();
-        retainedTracks.clear();
-        faults.clear();
-        lastItem.reset();
+        queue.reset();
         queued = 0;
         skip = 0;
         credit = 0;
@@ -313,21 +272,15 @@ struct Player::Impl {
     void failStream(const std::string &why, uint8_t reason = 1) {
         bool connectedStream = http.fd >= 0;
         log("stream error: " + why);
-        if (sink.decodeAhead() && fetching)
-            sink.coreEvent("fault:" + why, fetching->descriptor.occurrence, submitted);
+        queue.streamFault(why);
         stopStream();
         if (fetching) {
-            if (sink.decodeAhead())
-                fetching->failed = true;
+            queue.markFailed(*fetching);
             fetching->eof = true;
             fetching->decoded = true;
             fetching->decoder.reset();
         }
-        if (sink.decodeAhead() && fetching && fetching->produced) {
-            fetching->failed = true;
-            fetching->decodedAt = jiffies();
-            faults.push_back(fetching);
-        } else
+        if (!queue.deferFault())
             stat("STMn");
         if (connectedStream)
             send("DSCO", Bytes{reason});
@@ -462,20 +415,7 @@ struct Player::Impl {
             throw std::runtime_error("duplicate codec configuration");
         DecoderConfig c;
         c.codec = p[0];
-        t.descriptor.codec = c.codec;
-        if (sink.decodeAhead())
-            sink.coreEvent("codec:" + std::string(1, c.codec), t.descriptor.occurrence, submitted);
-        c.finitePcmContainers = sink.decodeAhead();
-        if (sink.decodeAhead() && cfg.flacSourceInfo) {
-            const auto id = t.descriptor.occurrence;
-            c.flacLog = [this, id](const std::string &text) {
-                log("queue FLAC occurrence=" + std::to_string(id) + " " + text);
-            };
-            c.flacSourceInfo = [this, id](std::optional<FlacSourceInfo> info) {
-                return cfg.flacSourceInfo(id, info);
-            };
-        }
-        c.transcoded = cfg.sourceIsTranscoded && cfg.sourceIsTranscoded(t.descriptor.occurrence);
+        queue.configureDecoder(t, c);
         c.size = p[1];
         c.rate = p[2];
         c.channels = p[3];
@@ -493,15 +433,11 @@ struct Player::Impl {
             if (n < 28)
                 throw std::runtime_error("short strm");
             uint32_t value = be32(b.data() + 18);
-            if (sink.decodeAhead())
-                log("queue command strm " + std::string(1, char(b[4])));
+            queue.commandObserved(char(b[4]));
             if (cfg.observeCommand)
                 cfg.observeCommand({char(b[4]), value, playing && !paused && submittedSinceFlush});
-            if (sink.decodeAhead() && sink.speakerDriven() && sink.queueCommand(char(b[4]), value)) {
-                if (b[4] == 'q' || b[4] == 'f')
-                    stat("STMf");
+            if (queue.remoteCommand(char(b[4]), value))
                 return;
-            }
             switch (b[4]) {
             case 't':
                 stat("STMt", value);
@@ -511,10 +447,7 @@ struct Player::Impl {
                 stat("STMf");
                 break;
             case 'f':
-                if (sink.decodeAhead()) {
-                    clear(true);
-                    stat("STMf");
-                } else
+                if (!queue.flush())
                     flushStreaming();
                 break;
             case 'p':
@@ -596,28 +529,8 @@ struct Player::Impl {
     }
     void start(const Bytes &b) {
         bool gapless = fetching && fetching->decoded && !ended;
-        const bool refetch = sink.decodeAhead() && sink.speakerDriven() && sink.takeQueueRefetch();
-        if (fetching && !fetching->decoded) {
-            if (refetch) {
-                // Keep immutable host assets, audible clock and cached track
-                // identities. Only the superseded producer's PCM is discarded.
-                for (const auto &t : output) {
-                    if (!t->decoded) {
-                        sink.coreEvent("queue-refetch", t->descriptor.occurrence, submitted);
-                        t->failed = true; // cancellation must not report STMd
-                    }
-                    t->output.clear();
-                    t->decoder.reset();
-                }
-                output.clear();
-                fetching.reset();
-                lastItem.reset();
-                overlap = {};
-                reservedWindow = queued = 0;
-                transitionOverlap = 0;
-            } else
-                clear(true);
-        }
+        if (!queue.beforeStart() && fetching && !fetching->decoded)
+            clear(true);
         stopStream();
         received = 0;
         bodyReceived = 0;
@@ -627,9 +540,7 @@ struct Player::Impl {
         stat("STMf");
         fetching = std::make_shared<Track>();
         auto &t = *fetching;
-        t.descriptor.occurrence = ++occurrence;
-        if (sink.decodeAhead())
-            sink.coreEvent("strm", occurrence, submitted);
+        queue.startTrack(t);
         t.gapless = gapless;
         t.autostart = b[5] - '0';
         t.threshold = std::min(size_t(b[11]) * 1024, input.capacity());
@@ -637,9 +548,7 @@ struct Player::Impl {
         t.replayGain = be32(b.data() + 18);
         t.transition = b[14] - '0';
         t.period = b[13];
-        t.descriptor.transition = t.transition;
-        t.descriptor.period = t.period;
-        t.descriptor.codec = char(b[6]);
+        queue.trackIntent(t, char(b[6]));
         ended = false;
         underrun = false;
         output.push_back(fetching);
@@ -789,7 +698,7 @@ struct Player::Impl {
                 t.decoderFinished = true;
             }
             std::string error = t.decoder->error();
-            if (!error.empty() && !sink.decodeAhead())
+            if (!error.empty() && !queue.defersDecoderErrors())
                 throw std::runtime_error(error);
             if (!t.decoder->format(t.format)) {
                 if (!error.empty() && t.decoder->done())
@@ -803,48 +712,16 @@ struct Player::Impl {
                 t.window = std::min<uint64_t>(frames, cfg.transitionMaxFrames);
                 reservedWindow = std::max(reservedWindow, size_t(t.window));
             }
-            if (sink.decodeAhead()) {
-                const auto exact = t.decoder->exactFrames();
-                if (!t.described || t.descriptor.sourceFrames != exact) {
-                    t.descriptor.transitionFrames = t.window;
-                    t.descriptor.rate = t.format.rate;
-                    t.descriptor.sourceFrames = exact;
-                    sink.trackDescriptor(t.descriptor);
-                    t.described = true;
-                }
-            }
+            queue.describe(t);
             Frame frames[1024];
             size_t room = outputCapacity() - queued;
-            if (sink.decodeAhead())
-                room = std::min(
-                    room, size_t(std::max(0.0, cfg.futurePcmSeconds - futureSeconds()) * t.format.rate));
+            room = queue.decodeRoom(t, room);
             size_t count = t.decoder->take(frames, std::min(size_t(1024), room));
             t.produced += count;
             t.output.insert(t.output.end(), frames, frames + count);
             queued += count;
-            // Observe completion before its error: the worker publishes the
-            // error before done. Reuse this snapshot below so a completion
-            // racing this poll cannot bypass queue fault handling.
-            const bool queueComplete = sink.decodeAhead() && t.decoder->done();
-            if (queueComplete)
-                error = t.decoder->error();
-            if (queueComplete && !error.empty()) {
-                const auto exact = t.decoder->exactFrames();
-                if (t.produced && exact && *exact > t.produced && *exact - t.produced <= t.format.rate) {
-                    const auto shortfall = *exact - t.produced;
-                    t.output.insert(t.output.end(), shortfall, Frame{});
-                    queued += shortfall;
-                    t.produced += shortfall;
-                    const auto message = "source-short " + std::to_string(shortfall) + " frames";
-                    log(message);
-                    sink.coreEvent("fault:" + message, t.descriptor.occurrence, t.produced);
-                } else
-                    throw std::runtime_error(error);
-            }
             size_t target = std::min(cfg.outputFrames, size_t(t.outputThreshold) * t.format.rate / 10);
-            bool complete = sink.decodeAhead() ? queueComplete : t.decoder->done();
-            if (sink.decodeAhead() && complete && !t.produced)
-                throw std::runtime_error("source-empty");
+            bool complete = queue.decodeComplete(t, error);
             if (t.autostart == 0 && (t.output.size() >= target || complete)) {
                 stat("STMl");
                 t.autostart = -1;
@@ -859,96 +736,20 @@ struct Player::Impl {
             }
             if (complete) {
                 t.decoded = true;
-                t.decodedAt = jiffies();
-                if (sink.decodeAhead())
-                    sink.coreEvent("decode-complete", t.descriptor.occurrence, t.produced);
+                queue.decoded(t);
                 if (t.transition == 3 || t.transition == 4) {
                     t.outLength = std::min<uint64_t>(t.window, t.output.size());
                     t.outStart = t.played + t.output.size() - t.outLength;
                 }
-                reportDecoded(t);
+                queue.reportDecoded(t);
             }
         } catch (const std::exception &e) {
             failStream(e.what());
         }
     }
-    void reportDecoded(Track &t) {
-        if (!t.decoded || t.failed || t.doneReported || (sink.decodeAhead() && !t.startReported))
-            return;
-        t.doneReported = true;
-        stat("STMd");
-        if (sink.decodeAhead())
-            sink.coreEvent("STMd", t.descriptor.occurrence, t.produced);
-    }
     void audibleEvents() {
-        if (sink.decodeAhead()) {
-            // History keeps track identity/timing, not decoder or PCM buffers.
-            for (auto &entry : retainedTracks)
-                if (entry.second != fetching && entry.second->decoded && entry.second->output.empty())
-                    entry.second->decoder.reset();
-            AudibleStart signal;
-            while (sink.takeAudibleStart(signal)) {
-                auto retained = retainedTracks.find(signal.occurrence);
-                if (sink.speakerDriven() && signal.confirmed && retained != retainedTracks.end() &&
-                    retained->second->first == signal.frame && retained->second->played) {
-                    if (audible == retained->second)
-                        continue;
-                    audible = retained->second;
-                    auto pending = std::find(boundaries.begin(), boundaries.end(), audible);
-                    if (pending != boundaries.end())
-                        boundaries.erase(boundaries.begin(), std::next(pending));
-                    stat("STMs");
-                    sink.coreEvent("STMs", signal.occurrence, signal.frame);
-                    audible->startReported = true;
-                    audible->audibleAt = jiffies();
-                    reportDecoded(*audible);
-                    continue;
-                }
-                auto it = std::find_if(boundaries.begin(), boundaries.end(), [&](const auto &t) {
-                    return t->descriptor.occurrence == signal.occurrence;
-                });
-                if (it == boundaries.end() || (*it)->first != signal.frame || !(*it)->played ||
-                    (!signal.confirmed && signal.frame >= sink.audibleFrames())) {
-                    log("queue audible signal rejected");
-                    continue;
-                }
-                audible = *it;
-                boundaries.erase(boundaries.begin(), std::next(it));
-                stat("STMs");
-                sink.coreEvent("STMs", signal.occurrence, signal.frame);
-                audible->startReported = true;
-                audible->audibleAt = jiffies();
-                reportDecoded(*audible);
-            }
-            AudibleState state;
-            while (sink.speakerDriven() && sink.takeAudibleState(state)) {
-                if (!audible || state.occurrence != audible->descriptor.occurrence)
-                    continue;
-                const bool wasPaused = paused;
-                const bool wasPlaying = playing;
-                paused = state.state == PlaybackState::Paused;
-                playing = state.state != PlaybackState::Stopped;
-                userPaused = paused;
-                wake = 0;
-                credit = 0;
-                if (paused && !wasPaused)
-                    stat("STMp");
-                else if (!playing && wasPlaying) {
-                    stat("STMu");
-                    ended = true;
-                } else if (playing && !paused && (wasPaused || !wasPlaying)) {
-                    stat("STMr");
-                    ended = false;
-                }
-            }
-            while (!faults.empty() && faults.front()->end != UINT64_MAX &&
-                   sink.drained(faults.front()->end)) {
-                stat("STMn");
-                sink.coreEvent("STMn", faults.front()->descriptor.occurrence, faults.front()->end);
-                faults.pop_front();
-            }
+        if (queue.audibleEvents())
             return;
-        }
         uint64_t position = cfg.startOnSubmit ? sink.startedFrames() : sink.audibleFrames();
         while (!boundaries.empty() && position > boundaries.front()->first) {
             audible = boundaries.front();
@@ -963,22 +764,12 @@ struct Player::Impl {
         const auto previous = boundaries.empty() ? audible : boundaries.back();
         if (previous && previous->format.rate != t->format.rate)
             t->gapless = false;
-        if (sink.decodeAhead()) {
-            itemEnd(lastItem, t->descriptor.occurrence, transitionOverlap, transitionReason);
-            lastItem = t;
-            transitionOverlap = 0;
-            transitionReason = "gapless";
-        }
+        queue.beforeBoundary(t);
         t->first = submitted;
         t->boundary = true;
         sink.trackBoundary(submitted, t->format, t->gapless);
         boundaries.push_back(t);
-        if (sink.decodeAhead() && sink.speakerDriven()) {
-            retainedTracks[t->descriptor.occurrence] = t;
-            // Match the host queue cap and retain metadata only, never PCM.
-            while (retainedTracks.size() > 60000)
-                retainedTracks.erase(retainedTracks.begin());
-        }
+        queue.afterBoundary(t);
         log("boundary frame=" + std::to_string(submitted) + " rate=" + std::to_string(t->format.rate) +
             " gapless=" + std::to_string(t->gapless) + " jiffies=" + std::to_string(jiffies()));
     }
@@ -998,21 +789,15 @@ struct Player::Impl {
         if (overlap.old || output.size() < 2 || !old->decoded)
             return true;
         auto next = output[1];
-        if (sink.decodeAhead() && !next->described && old->transition == 1 &&
-            !due(jiffies(), successorDeadline(*old)))
+        if (queue.waitOverlapHeader(*old, *next))
             return false;
         if (!next->ready || !next->decoder || !next->decoder->format(next->format))
             return true;
         if (next->crossChecked)
             return true;
-        bool smart = sink.decodeAhead() && cfg.smartSameAlbum &&
-                     cfg.smartSameAlbum(old->descriptor.occurrence, next->descriptor.occurrence);
+        bool smart = queue.sameAlbum(*old, *next);
         if (next->transition != 1 || !next->window || old->format.rate != next->format.rate || smart) {
-            if (sink.decodeAhead())
-                transitionReason = smart                                   ? "smart-same-album"
-                                   : next->transition == 0                 ? "transition-type-0"
-                                   : old->format.rate != next->format.rate ? "different-rates"
-                                                                           : "envelope-only";
+            queue.transitionRejected(*old, *next, smart);
             next->crossChecked = true;
             if (next->transition == 1 && old->format.rate != next->format.rate)
                 log("crossfade disabled: sample rates differ");
@@ -1023,45 +808,23 @@ struct Player::Impl {
         if (old->output.size() > window)
             return true;
         if (next->output.size() < length && !next->decoded) {
-            if (sink.decodeAhead() && !due(jiffies(), successorDeadline(*old)))
+            if (queue.waitOverlapPcm(*old))
                 return false;
             next->crossChecked = true;
             log("crossfade disabled: insufficient incoming PCM");
-            if (sink.decodeAhead())
-                transitionReason = "insufficient-incoming-pcm";
+            queue.insufficientIncoming();
             return true;
         }
         length = std::min<uint64_t>(length, next->output.size());
         next->crossChecked = true;
         if (length) {
             overlap = {old, next, length, 0};
-            transitionOverlap = length;
-            transitionReason = "crossfade";
+            queue.crossfade(length);
             boundary(next);
             log("crossfade start frame=" + std::to_string(submitted) + " length=" + std::to_string(length) +
                 " rate=" + std::to_string(next->format.rate));
         }
         return true;
-    }
-    uint32_t successorDeadline(const Track &t) const {
-        const auto frames = sink.committedItemFrames(t.descriptor.occurrence).value_or(t.produced);
-        return t.audibleAt + uint32_t(std::max(0.0, double(frames) / t.format.rate * 1000 - 100));
-    }
-    bool waitSuccessor(const Track &t) const {
-        if (!sink.decodeAhead() || output.size() != 1 || t.transition != 1 || t.failed)
-            return false;
-        if (!t.decoded)
-            return true;
-        if (!t.startReported && !t.descriptor.sourceFrames &&
-            sink.awaitingPublication(t.descriptor.occurrence))
-            return false;
-        // The held tail must be resolved before its audible deadline. A short
-        // first item keeps one frame to establish STMs before requesting more.
-        const auto position = sink.audibleFrames();
-        const auto end = t.first + t.produced;
-        const auto remaining = end > position ? end - position : 0;
-        return !t.startReported || (remaining > std::max<uint64_t>(1, t.format.rate / 10) &&
-                                    !due(jiffies(), successorDeadline(t)));
     }
     void outputStep(uint32_t now) {
         uint32_t delta = now - lastTick;
@@ -1084,23 +847,9 @@ struct Player::Impl {
             auto t = output.front();
             if (t->output.empty()) {
                 if (t->decoded) {
-                    if (waitSuccessor(*t))
+                    if (queue.waitSuccessor(*t))
                         break;
-                    if (!t->itemEnded)
-                        t->end = submitted;
-                    if (sink.decodeAhead()) {
-                        sink.coreEvent("decoder-track-end", t->descriptor.occurrence, submitted);
-                        if (!t->boundary)
-                            itemEnd(t, output.size() > 1 ? output[1]->descriptor.occurrence : 0, 0,
-                                    t->failed ? "source-fault" : "unplayed");
-                        else if (output.size() == 1)
-                            itemEnd(t, 0, 0,
-                                    t->transition == 0 ? "no-transition"
-                                    : !t->startReported && !t->descriptor.sourceFrames &&
-                                            sink.awaitingPublication(t->descriptor.occurrence)
-                                        ? "sealed-startup"
-                                        : "successor-deadline");
-                    }
+                    queue.outputEnded(t);
                     output.pop_front();
                     continue;
                 }
@@ -1123,7 +872,7 @@ struct Player::Impl {
                 count = std::min(count, size_t(std::max(0.0, std::floor(credit * t->format.rate))));
             if (!count)
                 break;
-            if (waitSuccessor(*t)) {
+            if (queue.waitSuccessor(*t)) {
                 const uint64_t hold = t->decoded ? std::min(t->window, t->produced - 1) : t->window;
                 if (t->output.size() <= hold)
                     break;
@@ -1191,7 +940,7 @@ struct Player::Impl {
         }
         audibleEvents();
         if (queued == 0 && fetching && fetching->decoded && output.empty() && sink.drained(submitted) &&
-            !ended && !sink.speakerDriven() && (!sink.decodeAhead() || !fetching->failed)) {
+            !ended && queue.mayDrain()) {
             sink.idle();
             stat("STMu");
             ended = true;
@@ -1214,18 +963,9 @@ struct Player::Impl {
     void run(const std::atomic_bool &stop) {
         lastTick = lastStat = jiffies();
         nextConnect = nextDiscovery = lastTick;
-        auto modeGeneration = sink.playbackGeneration();
+        queue.beginRun();
         while (!stop.load()) {
-            const auto mode = sink.playbackGeneration();
-            if (mode != modeGeneration) {
-                clear(true);
-                modeGeneration = mode;
-                // Publish capabilities before the host asks LMS for the
-                // continuation. Default sinks never enter this branch.
-                if (control.fd >= 0 && !controlConnecting)
-                    send("HELO", hello(cfg.mac, true, received, sink.maxSampleRate()));
-                sink.playbackReady(mode);
-            }
+            queue.pollGeneration();
             uint32_t now = jiffies();
             controlStep(now);
             if (control.fd >= 0 && !controlConnecting) {

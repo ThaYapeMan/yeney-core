@@ -63,6 +63,8 @@ encoding. No changes to YeneY or LampaStream are required.
 
 See [decoder formats, gapless rules, limits and evidence](docs/decoders.md).
 `make format` formats our C++ files; third-party sources stay unchanged.
+See [queue mode inventory and internal hooks](docs/queue-mode.md) for the
+capability-isolated playback and decoder policy, and before/after PCM proof.
 
 Licensed under [PolyForm Noncommercial 1.0.0](LICENSE).
 Required Notice: Copyright (c) 2026 Jaap van Vliet.

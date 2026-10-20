@@ -5,6 +5,7 @@
 // THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
 
 #include "mp4.h"
+#include "queue_decode.h"
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -460,7 +461,8 @@ struct Mp4Demuxer::Impl {
         // LMS can retain the original mdat length in a rewritten seek header.
         // In queue mode preserve all complete packets, then let the decoder's
         // exact frame count distinguish a harmless tail from source-short.
-        if (partialMedia && selected && ((active && type == "mdat") || next == samples.size())) {
+        if (detail::QueueDecodePolicy::partialMp4(partialMedia, selected, active && type == "mdat",
+                                                  next == samples.size())) {
             finished = true;
             return;
         }

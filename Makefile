@@ -10,7 +10,7 @@ LDLIBS += -pthread -lFLAC
 
 ALAC_C = EndianPortable ALACBitUtilities ag_dec dp_dec matrix_dec
 ALAC_OBJS = $(addprefix build/alac/,$(addsuffix .o,$(ALAC_C))) build/alac/ALACDecoder.o
-CORE_OBJS = core/transitions.o core/protocol.o core/player.o core/decoder.o core/mp4.o $(ALAC_OBJS)
+CORE_OBJS = core/transitions.o core/protocol.o core/player.o core/queue_mode.o core/queue_decode.o core/decoder.o core/mp4.o $(ALAC_OBJS)
 APP_OBJS = apps/yeney-player/main.o apps/yeney-player/sinks.o sinks/shm_v1/sink.o
 TEST_OBJS = tests/speaker_fixture.o tests/clock_unit.o  tests/shm_unit.o tests/unit.o tests/fixture.o tests/decoder_fixture.o
 
@@ -46,7 +46,7 @@ core/decoder.o: CPPFLAGS += -Wno-multichar
 decoder-test: tests/decoder_fixture.o libyeneycore.a
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDLIBS)
 
-demux-sanitized: tests/demux_fixture.cpp core/mp4.cpp core/protocol.cpp core/mp4.h
+demux-sanitized: tests/demux_fixture.cpp core/mp4.cpp core/protocol.cpp core/mp4.h core/queue_decode.h core/decoder.h core/flac_header.h core/queue_flac_origin.h
 	$(CXX) $(CPPFLAGS) -std=c++17 -g -O1 -fno-omit-frame-pointer -fno-pie -no-pie -fsanitize=address,undefined -o $@ tests/demux_fixture.cpp core/mp4.cpp core/protocol.cpp
 
 shm-unit: tests/shm_unit.o sinks/shm_v1/sink.o
