@@ -51,7 +51,7 @@ private:
     bool selectionPending = false, resumedAcknowledged = false, receivedAcknowledged = false;
     bool cachedConnectionPending = false;
     uint64_t nextStartCredits = 0, round = 0;
-    uint64_t occurrence = 0, transitionOverlap = 0, modeGeneration = 0;
+    uint64_t occurrence = 0, transitionOverlap = 0;
     std::string transitionReason = "gapless";
     std::shared_ptr<Track> lastItem;
     std::map<uint64_t, std::shared_ptr<Track>> retainedTracks;

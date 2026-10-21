@@ -94,6 +94,13 @@ bool QueueMode::audibleEvents() {
     auto &p = state;
     if (!sink.decodeAhead())
         return false;
+    if (sink.takeQueueFailure()) {
+        stat("STMn");
+        p.playing = p.paused = false;
+        p.ended = true;
+        if (p.fetching)
+            p.fetching->failed = true;
+    }
     if (cachedConnectionPending)
         return true; // RESP must reach LMS before a cached speaker start
     // History keeps track identity/timing, not decoder or PCM buffers.
@@ -471,16 +478,6 @@ bool QueueMode::mayDrain() const {
     auto &p = state;
     return !sink.speakerDriven() && (!sink.decodeAhead() || !p.fetching->failed);
 }
-void QueueMode::beginRun() { modeGeneration = sink.playbackGeneration(); }
-void QueueMode::pollGeneration() {
-    ++round;
-    const auto mode = sink.playbackGeneration();
-    if (mode != modeGeneration) {
-        lastStart.clear();
-        nextStartCredits = 0;
-        hooks.reset();
-        modeGeneration = mode;
-        sink.playbackReady(mode);
-    }
-}
+void QueueMode::beginRun() {}
+void QueueMode::pollGeneration() { ++round; }
 } // namespace yeney::detail

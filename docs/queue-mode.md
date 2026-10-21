@@ -144,3 +144,19 @@ Autostart-zero `u` releases PCM production without inventing STMr or audibility.
 Managed `queueRelativeClock` reports elapsed since the run's confirmed source
 origin: LMS adds its seek offset, so the core must not add that offset again.
 All new callbacks/options are inert for normal stream and SHM sinks.
+
+## Thin relay rebuild (after queue-full-v1)
+
+The bridge now uses an LMS-driven relay instead of a mode handoff controller.
+`QueueMode::modeGeneration` and generation-change producer reset/readiness
+notification have been removed. `beginRun` is an inert compatibility hook and
+`pollGeneration` only advances the STMs/STMd ordering round. Public Sink
+`playbackGeneration`/`playbackReady` defaults remain source-compatible but are
+not consumed. The generation-only speaker test is parked at `queue-full-v1`;
+all rendering, audible-state, refetch and protocol tests remain.
+
+A sink may report an explicit renderer rejection once with `takeQueueFailure`.
+Only decode-ahead speaker-driven sinks consume it: they send STMn, mark the
+producer failed and stop reporting success for that run. Defaults leave all
+stream/WAV/SHM protocol bytes untouched. This represents a failed renderer
+acceptance, not a decoder failure inferred from received bytes.

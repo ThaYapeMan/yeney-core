@@ -62,6 +62,7 @@ public:
     // Optional serialized remote-control owner. Return true only when the host
     // consumes this command. No status acknowledgement is fabricated by core;
     // speaker evidence remains authoritative. s may be consumed for cache reuse.
+    virtual bool takeQueueFailure() { return false; }
     virtual bool queueCommand(char, uint32_t) { return false; }
     // One-shot host authorization for an independent queue seek render. Only
     // decodeAhead + speakerDriven may cancel a producer without flushing assets.
