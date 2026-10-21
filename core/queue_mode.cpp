@@ -255,7 +255,7 @@ void QueueMode::configureDecoder(Track &t, DecoderConfig &c) {
     c.transcoded = cfg.sourceIsTranscoded && cfg.sourceIsTranscoded(t.descriptor.occurrence);
 }
 void QueueMode::receivedStartCommand(const Bytes &request) {
-    if (sink.playbackGeneration() || sink.decodeAhead()) {
+    if (sink.decodeAhead()) {
         receivedStart = request;
         receivedAcknowledged = false;
     }
