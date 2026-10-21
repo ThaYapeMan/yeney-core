@@ -160,3 +160,8 @@ Only decode-ahead speaker-driven sinks consume it: they send STMn, mark the
 producer failed and stop reporting success for that run. Defaults leave all
 stream/WAV/SHM protocol bytes untouched. This represents a failed renderer
 acceptance, not a decoder failure inferred from received bytes.
+
+`queueItemProduced` is an optional storage-completion gate (default true). The
+relay sink requires every promised frame to exist before STMd, independently
+of decoder EOF and asynchronous storage jobs. Remote time gating remains in
+the core; stream sinks retain their original completion path.

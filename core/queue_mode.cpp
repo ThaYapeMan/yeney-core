@@ -52,6 +52,8 @@ void QueueMode::reportDecoded(Track &t) {
         (sink.decodeAhead() && (!t.startReported || selectionPending)))
         return;
     if (sink.decodeAhead()) {
+        if (!sink.queueItemProduced(t.descriptor.occurrence))
+            return;
         if (round <= t.startRound)
             return; // put STMs on the wire one event-loop round before STMd
         if (sink.speakerDriven() && cfg.queueRemoteSource && cfg.queueRemoteSource(t.descriptor.occurrence)) {
