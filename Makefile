@@ -10,9 +10,9 @@ LDLIBS += -pthread -lFLAC
 
 ALAC_C = EndianPortable ALACBitUtilities ag_dec dp_dec matrix_dec
 ALAC_OBJS = $(addprefix build/alac/,$(addsuffix .o,$(ALAC_C))) build/alac/ALACDecoder.o
-CORE_OBJS = core/transitions.o core/protocol.o core/player.o core/queue_mode.o core/queue_decode.o core/decoder.o core/mp4.o $(ALAC_OBJS)
+CORE_OBJS = core/decimator.o core/decimating_decoder.o core/transitions.o core/protocol.o core/player.o core/queue_mode.o core/queue_decode.o core/decoder.o core/mp4.o $(ALAC_OBJS)
 APP_OBJS = apps/yeney-player/main.o apps/yeney-player/sinks.o sinks/shm_v1/sink.o
-TEST_OBJS = tests/speaker_fixture.o tests/clock_unit.o  tests/shm_unit.o tests/unit.o tests/fixture.o tests/decoder_fixture.o
+TEST_OBJS = tests/decimator_fixture.o tests/decimator_unit.o tests/speaker_fixture.o tests/clock_unit.o  tests/shm_unit.o tests/unit.o tests/fixture.o tests/decoder_fixture.o
 
 all: libyeneycore.a yeney-player
 
@@ -56,6 +56,7 @@ clock-unit: tests/clock_unit.o sinks/shm_v1/sink.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ -pthread
 
 test: test-speaker format-check clock-unit shm-unit all unit-test test-player decoder-test demux-sanitized
+	./decimator-unit
 	./clock-unit
 	./unit-test
 	./shm-unit
@@ -69,7 +70,7 @@ test: test-speaker format-check clock-unit shm-unit all unit-test test-player de
 	python3 tests/queue_protocol_test.py
 
 clean:
-	rm -f test-speaker $(CORE_OBJS) $(APP_OBJS) $(TEST_OBJS) $(CORE_OBJS:.o=.d) $(APP_OBJS:.o=.d) $(TEST_OBJS:.o=.d) libyeneycore.a yeney-player clock-unit unit-test test-player decoder-test demux-sanitized shm-unit decoder-benchmark decoder-benchmark.d
+	rm -f decimator-fixture decimator-unit tests/decimator_fixture.o tests/decimator_fixture.d tests/decimator_unit.o tests/decimator_unit.d test-speaker $(CORE_OBJS) $(APP_OBJS) $(TEST_OBJS) $(CORE_OBJS:.o=.d) $(APP_OBJS:.o=.d) $(TEST_OBJS:.o=.d) libyeneycore.a yeney-player clock-unit unit-test test-player decoder-test demux-sanitized shm-unit decoder-benchmark decoder-benchmark.d
 
 -include $(CORE_OBJS:.o=.d) $(APP_OBJS:.o=.d) $(TEST_OBJS:.o=.d)
 .PHONY: all clean test format format-check
@@ -86,3 +87,10 @@ decoder-benchmark: tests/decoder_benchmark.cpp libyeneycore.a
 
 test-speaker: tests/speaker_fixture.o libyeneycore.a
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDLIBS)
+
+decimator-fixture: tests/decimator_fixture.o libyeneycore.a
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDLIBS)
+
+decimator-unit: tests/decimator_unit.o libyeneycore.a
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDLIBS)
+test: decimator-unit

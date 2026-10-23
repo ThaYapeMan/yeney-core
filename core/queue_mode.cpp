@@ -48,11 +48,13 @@ void QueueMode::itemEnd(const std::shared_ptr<Track> &t, uint64_t next, uint64_t
     sink.resolvedItemBoundary({t->descriptor.occurrence, next, p.submitted, overlapFrames, reason});
 }
 void QueueMode::reportDecoded(Track &t) {
-    if (!t.decoded || t.failed || t.doneReported ||
+    const bool lookahead = t.decoder && t.decoder->needsSuccessor();
+    if ((!t.decoded && !lookahead) || t.failed || t.doneReported ||
         (sink.decodeAhead() && (!t.startReported || selectionPending)))
         return;
     if (sink.decodeAhead()) {
-        if (!sink.queueItemProduced(t.descriptor.occurrence))
+        if (!(lookahead ? sink.queuePrefixProduced(t.descriptor.occurrence, t.produced)
+                        : sink.queueItemProduced(t.descriptor.occurrence)))
             return;
         if (round <= t.startRound)
             return; // put STMs on the wire one event-loop round before STMd
@@ -66,6 +68,8 @@ void QueueMode::reportDecoded(Track &t) {
         }
     }
     t.doneReported = true;
+    if (lookahead)
+        t.decoder->successorRequested();
     if (sink.decodeAhead() && sink.speakerDriven())
         ++nextStartCredits;
     stat("STMd");
@@ -335,7 +339,8 @@ bool QueueMode::flush() {
 bool QueueMode::beforeStart() {
     auto &p = state;
     const bool refetch = sink.decodeAhead() && sink.speakerDriven() && sink.takeQueueRefetch();
-    if (p.fetching && !p.fetching->decoded) {
+    if (p.fetching && !p.fetching->decoded &&
+        !(p.fetching->decoder && p.fetching->decoder->needsSuccessor())) {
         if (refetch) {
             // Keep immutable host assets, audible clock and cached track
             // identities. Only the superseded producer's PCM is discarded.

@@ -82,6 +82,9 @@ public:
     // A sealed-only host cannot announce an unknown-count item until its
     // outgoing boundary resolves. Its pre-start successor deadline is zero.
     virtual bool awaitingPublication(uint64_t) const { return false; }
+    virtual uint32_t conversionRate() const { return 0; }
+    virtual bool sourceMayContinue() const { return false; }
+    virtual bool queuePrefixProduced(uint64_t id, uint64_t) const { return queueItemProduced(id); }
     virtual uint32_t maxSampleRate() const { return 48000; }
     virtual void trackBoundary(uint64_t frame, const Format &, bool gaplessCandidate) = 0;
     virtual size_t write(const Frame *, size_t frames) = 0;

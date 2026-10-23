@@ -5,6 +5,7 @@
 // THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
 
 #include "decoder.h"
+#include "decimating_decoder.h"
 #include "mp4.h"
 #include "queue_decode.h"
 #include "ring.h"
@@ -637,7 +638,7 @@ public:
     ~AlacWorker() override { cancel(); }
 };
 } // namespace
-std::unique_ptr<Decoder> makeDecoder(const DecoderConfig &c) {
+static std::unique_ptr<Decoder> nativeDecoder(const DecoderConfig &c) {
     switch (c.codec) {
     case 'p':
     case 'a':
@@ -651,5 +652,9 @@ std::unique_ptr<Decoder> makeDecoder(const DecoderConfig &c) {
     default:
         throw std::runtime_error("unsupported codec");
     }
+}
+std::unique_ptr<Decoder> makeDecoder(const DecoderConfig &c) {
+    auto raw = nativeDecoder(c);
+    return c.convertToRate ? decimatingDecoder(std::move(raw), c) : std::move(raw);
 }
 } // namespace yeney

@@ -12,7 +12,11 @@
 #include <optional>
 #include <string>
 namespace yeney {
+struct DecimationChain;
 struct DecoderConfig {
+    uint32_t convertToRate = 0; // opt-in native hi-res conversion, never ordinary stream rooms
+    std::shared_ptr<DecimationChain> conversion;
+    bool gaplessSource = false, expectSuccessor = false;
     char codec = 'p';
     // Queue-only, called on the decoder worker before the first output frame.
     // Hosts must return within one second; missing metadata keeps sealed output.
@@ -35,6 +39,9 @@ public:
     virtual size_t take(Frame *, size_t) = 0;
     virtual bool format(Format &) const = 0;
     virtual std::optional<uint64_t> exactFrames() const { return std::nullopt; }
+    virtual bool needsSuccessor() const { return false; }
+    virtual void successorRequested() {}
+    virtual bool processed() const { return false; }
     virtual bool done() const = 0;
     virtual std::string error() const = 0;
     virtual size_t inputBuffered() const = 0;

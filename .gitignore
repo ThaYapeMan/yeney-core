@@ -18,3 +18,6 @@ __pycache__/
 /clock-unit
 
 /test-speaker
+
+/decimator-fixture
+/decimator-unit

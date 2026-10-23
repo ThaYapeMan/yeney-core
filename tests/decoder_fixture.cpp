@@ -17,6 +17,10 @@ int main(int argc, char **argv) {
         yeney::DecoderConfig cfg;
         cfg.codec = argv[1][0];
         cfg.finitePcmContainers = true;
+        if (std::getenv("YENEY_TEST_DECIMATE")) {
+            cfg.maxRate = 192000;
+            cfg.convertToRate = 48000;
+        }
         if (const char *total = std::getenv("YENEY_TEST_FLAC_TOTAL")) {
             const uint64_t n = std::stoull(total);
             cfg.flacSourceInfo = [n](std::optional<yeney::FlacSourceInfo> info) {

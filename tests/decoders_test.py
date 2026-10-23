@@ -96,7 +96,7 @@ def alac_parts(file):
     return cookie, packets
 
 
-def mp4(cookie, packets, frames, co64=False, last=False, trim=None, smpb=None, second=False, wide=False, end=False, gaps=False, backwards=False):
+def mp4(cookie, packets, frames, co64=False, last=False, trim=None, smpb=None, second=False, wide=False, end=False, gaps=False, backwards=False, complete=False):
     # Our fixture writer deliberately uses a new chunk for every packet and
     # changing stsc runs for a separate variant, independent of the demuxer.
     rate = struct.unpack_from('!I', cookie, 20)[0]
@@ -112,7 +112,7 @@ def mp4(cookie, packets, frames, co64=False, last=False, trim=None, smpb=None, s
             media.extend(packet)
     ftyp = box('ftyp', b'M4A \0\0\0\0M4A isom')
     def movie(base):
-        sample_entry = bytes(6) + struct.pack('!HHHIHHHHI', 1, 0, 0, 0, channels, bits, 0, 0, rate << 16)
+        sample_entry = bytes(6) + struct.pack('!HHHIHHHHI', 1, 0, 0, 0, channels, bits, 0, 0, (rate << 16) if rate <= 65535 else 0)
         assert len(sample_entry) == 28
         stsd = box('stsd', bytes(4) + U32(1) + box('alac', sample_entry + box('alac', bytes(4) + cookie)))
         stsz = box('stsz', bytes(4) + U32(0) + U32(len(packets)) + b''.join(U32(len(p)) for p in packets))
@@ -134,7 +134,13 @@ def mp4(cookie, packets, frames, co64=False, last=False, trim=None, smpb=None, s
         if trim is not None:
             delay, count = trim
             edts = box('edts', box('elst', bytes(4) + U32(1) + struct.pack('!IiI', count, delay, 0x10000)))
-        trak = box('trak', edts + box('mdia', mdhd + hdlr + box('minf', stbl)))
+        tkhd = b''
+        extra = b''
+        if complete:
+            matrix = struct.pack('!9I',0x10000,0,0,0,0x10000,0,0,0,0x40000000)
+            tkhd = box('tkhd',U32(7)+bytes(8)+U32(1)+U32(0)+U32(frames)+bytes(8)+struct.pack('!4H',0,0,0x100,0)+matrix+bytes(8))
+            extra = box('smhd',bytes(8))+box('dinf',box('dref',bytes(4)+U32(1)+box('url ',U32(1))))
+        trak = box('trak', tkhd + edts + box('mdia', mdhd + hdlr + box('minf', extra + stbl)))
         # A preceding video track has intentionally unrelated durations/tables.
         video = box('trak', box('mdia', box('hdlr', bytes(8) + b'vide' + bytes(12)) + box('minf', box('stbl', box('stsz', bytes(4) + U32(7) + U32(1)))))) if second else b''
         metadata = b''

@@ -5,6 +5,7 @@
 // THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
 
 #include "player.h"
+#include "decimating_decoder.h"
 #include "decoder.h"
 #include "play_clock.h"
 #include "playback_state.h"
@@ -98,6 +99,7 @@ struct Player::Impl {
     using Track = detail::PlaybackTrack;
     using Overlap = detail::Overlap;
     Config cfg;
+    std::shared_ptr<DecimationChain> conversion = std::make_shared<DecimationChain>();
     Sink &sink;
     Socket control, http, discovery;
     sockaddr_in server{};
@@ -204,6 +206,7 @@ struct Player::Impl {
         reservedWindow = 0;
         boundaries.clear();
         queue.reset();
+        conversion->reset();
         queued = 0;
         skip = 0;
         credit = 0;
@@ -418,6 +421,12 @@ struct Player::Impl {
         c.channels = p[3];
         c.endian = p[4];
         c.maxRate = sink.maxSampleRate();
+        c.convertToRate = sink.conversionRate();
+        c.conversion = conversion;
+        c.gaplessSource = t.gapless && t.transition == 0;
+        c.expectSuccessor = sink.sourceMayContinue() && t.transition == 0;
+        if (c.convertToRate && !c.flacLog)
+            c.flacLog = [this](const auto &line) { log(line); };
         c.earlyMediaCap = cfg.earlyMediaBytes;
         t.decoder = cfg.decoderFactory ? cfg.decoderFactory(c) : makeDecoder(c);
         if (!t.decoder)
@@ -538,7 +547,9 @@ struct Player::Impl {
     }
     void start(const Bytes &b) {
         cachedRun = false;
-        bool gapless = fetching && fetching->decoded && !ended;
+        bool gapless = fetching &&
+                       (fetching->decoded || (fetching->decoder && fetching->decoder->needsSuccessor())) &&
+                       !ended;
         if (!queue.beforeStart() && fetching && !fetching->decoded)
             clear(true);
         stopStream();
@@ -713,7 +724,27 @@ struct Player::Impl {
         if (bodyReceived == contentLength)
             eof();
     }
+    void convertedTails() {
+        for (const auto &old : output) {
+            if (old == fetching || old->decoded || !old->decoder || !old->decoder->processed())
+                continue;
+            Frame frames[1024];
+            const auto room = outputCapacity() - queued;
+            auto count = old->decoder->take(frames, std::min(size_t(1024), room));
+            old->output.insert(old->output.end(), frames, frames + count);
+            old->produced += count;
+            queued += count;
+            if (!old->decoder->error().empty())
+                throw std::runtime_error(old->decoder->error());
+            if (old->decoder->done()) {
+                old->decoded = true;
+                queue.decoded(*old);
+            }
+        }
+    }
     void decode() {
+        if (sink.conversionRate())
+            convertedTails();
         if (cachedRun || !fetching || fetching->decoded || !haveHeaders)
             return;
         auto &t = *fetching;
@@ -771,6 +802,8 @@ struct Player::Impl {
                 }
                 t.autostart = -1;
             }
+            if (t.decoder->needsSuccessor())
+                queue.reportDecoded(t);
             if (complete) {
                 t.decoded = true;
                 queue.decoded(t);
@@ -932,7 +965,8 @@ struct Player::Impl {
                      t->output.size() > crossWindow(*output[1]))
                 count = std::min<uint64_t>(count, t->output.size() - crossWindow(*output[1]));
             Frame frames[256];
-            bool processed = bool(overlap.old) || (t->replayGain && t->replayGain != 65536);
+            bool processed = bool(overlap.old) || (t->decoder && t->decoder->processed()) ||
+                             (t->replayGain && t->replayGain != 65536);
             for (size_t i = 0; i < count; ++i) {
                 const auto gain = envelope(*t, t->played + i);
                 processed = processed || gain != 65536;
