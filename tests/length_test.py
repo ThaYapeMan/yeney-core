@@ -20,11 +20,11 @@ def alac(values,rate,*,declared=None,trim=None,smpb=None,zero_tail=False,packet_
     return mp4(cookie,packets,len(values) if declared is None else declared,trim=trim,smpb=smpb,complete=True,movie_scale=movie_scale,media_scale=media_scale)
 def signal(frames,start=0):return [((i*1237)%1000000-500000,(i*4217)%1000000-500000) for i in range(start,start+frames)]
 def raw(values):return b''.join(struct.pack('<ii',l*256,r*256) for l,r in values)
-def decode(path,output,decimate=False):
+def decode(path,output,decimate=False,codec='l'):
     env=dict(os.environ,YENEY_TEST_NATIVE_RATE='1')
     if decimate:env['YENEY_TEST_DECIMATE']='1'
     else:env.pop('YENEY_TEST_DECIMATE',None)
-    return subprocess.run([str(ROOT/'decoder-test'),'l',str(path),str(output)],env=env,capture_output=True,text=True)
+    return subprocess.run([str(ROOT/'decoder-test'),codec,str(path),str(output)],env=env,capture_output=True,text=True)
 class Lengths(unittest.TestCase):
     def test_structures(self):
         with tempfile.TemporaryDirectory(prefix='yeney-length-') as d:
@@ -62,6 +62,34 @@ class Lengths(unittest.TestCase):
             path.write_bytes(alac(signal(11384),44100,declared=16384,packet_size=8192))
             result=decode(path,out);self.assertNotEqual(result.returncode,0);self.assertIn('source-short 5000 frames',result.stderr)
         print('PASS ALAC EOF length policy: one-packet silence repair before decimation, exact published count, >packet and >100 ms faults, source-long truncation',flush=True)
+    def test_flac_bounds(self):
+        with tempfile.TemporaryDirectory(prefix='yeney-length-flac-') as d:
+            d=Path(d)
+            for rate in (44100,96000):
+                values=signal(12000);body=b''.join(int(v).to_bytes(3,'little',signed=True) for pair in values for v in pair)
+                wave=b'RIFF'+struct.pack('<I',len(body)+36)+b'WAVEfmt '+struct.pack('<IHHIIHH',16,1,2,rate,rate*6,6,24)+b'data'+struct.pack('<I',len(body))+body
+                (d/'in.wav').write_bytes(wave)
+                subprocess.run(['flac','-s','-f','-o',str(d/'original.flac'),str(d/'in.wav')],check=True)
+                original=(d/'original.flac').read_bytes()
+                for delta in (1000,-1000,5000,0):
+                    data=bytearray(original);total=len(values)+delta
+                    data[21]=(data[21]&240)|((total>>32)&15);data[22:26]=(total&0xffffffff).to_bytes(4,'big')
+                    path=d/'test.flac';path.write_bytes(data);out=d/'out.raw'
+                    result=decode(path,out,codec='f')
+                    if delta==5000:
+                        self.assertNotEqual(result.returncode,0);self.assertIn('source-short 5000 frames',result.stderr);continue
+                    self.assertEqual(result.returncode,0,result.stderr);self.assertIn('EXACT '+str(total),result.stdout)
+                    expected=raw(values[:total])+bytes(max(0,delta)*8);self.assertEqual(out.read_bytes(),expected)
+                    if delta>0:self.assertIn('source-short padded 1000 frames',result.stdout)
+                    if delta<0:self.assertIn('source-long truncated 1000 frames',result.stdout)
+                    if delta==0:self.assertNotIn('source-short',result.stdout);self.assertNotIn('source-long',result.stdout)
+                    converted=decode(path,out,True,codec='f');self.assertEqual(converted.returncode,0,converted.stderr)
+                    factor=1 if rate==44100 else 2;self.assertIn('FRAMES '+str((total+factor-1)//factor),converted.stdout)
+                # A stream client keeps the original strict/default PCM path.
+                data=bytearray(original);total=len(values)+1000;data[21]=(data[21]&240)|((total>>32)&15);data[22:26]=(total&0xffffffff).to_bytes(4,'big');path.write_bytes(data)
+                result=subprocess.run([str(ROOT/'decoder-test'),'f',str(path),str(out)],env=dict(os.environ,YENEY_TEST_STRICT='1',YENEY_TEST_NATIVE_RATE='1'),capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(out.read_bytes(),raw(values));self.assertNotIn('padded',result.stdout)
+        print('PASS FLAC EOF length policy: STREAMINFO vs actual output, block-sized bounded silence, large-short fault, long-source truncation, exact native/decimated counts; strict stream PCM unchanged',flush=True)
     def test_private(self):
         directory=Path('/mnt/c/HueSyncLXC/private-fixtures')
         files=sorted(p for p in directory.glob('*') if p.suffix.lower() in ('.m4a','.flac')) if directory.is_dir() else []

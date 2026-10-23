@@ -16,7 +16,7 @@ int main(int argc, char **argv) {
     try {
         yeney::DecoderConfig cfg;
         cfg.codec = argv[1][0];
-        cfg.finitePcmContainers = true;
+        cfg.finitePcmContainers = std::getenv("YENEY_TEST_STRICT") == nullptr;
         if (std::getenv("YENEY_TEST_NATIVE_RATE"))
             cfg.maxRate = 192000;
         cfg.flacLog = [](const auto &line) { std::cout << line << '\n'; };
