@@ -13,6 +13,7 @@ struct Mp4Info {
     Bytes cookie;
     Format format;
     uint32_t framesPerPacket = 0;
+    uint64_t packetCount = 0;
     uint64_t totalFrames = 0, trimBegin = 0, trimEnd = 0;
 };
 // Own incremental box/table parser. Packet callbacks run synchronously and may

@@ -96,10 +96,12 @@ def alac_parts(file):
     return cookie, packets
 
 
-def mp4(cookie, packets, frames, co64=False, last=False, trim=None, smpb=None, second=False, wide=False, end=False, gaps=False, backwards=False, complete=False):
+def mp4(cookie, packets, frames, co64=False, last=False, trim=None, smpb=None, second=False, wide=False, end=False, gaps=False, backwards=False, complete=False, movie_scale=None, media_scale=None):
     # Our fixture writer deliberately uses a new chunk for every packet and
     # changing stsc runs for a separate variant, independent of the demuxer.
     rate = struct.unpack_from('!I', cookie, 20)[0]
+    movie_scale = movie_scale or rate
+    media_scale = media_scale or rate
     channels, bits = cookie[9], cookie[5]
     chunk_groups = [packets[:2]] + [[p] for p in packets[2:]] if len(packets) > 2 else [[p] for p in packets]
     media = bytearray()
@@ -118,7 +120,7 @@ def mp4(cookie, packets, frames, co64=False, last=False, trim=None, smpb=None, s
         stsz = box('stsz', bytes(4) + U32(0) + U32(len(packets)) + b''.join(U32(len(p)) for p in packets))
         per_packet = struct.unpack_from('!I', cookie)[0]
         durations = [per_packet] * (len(packets) - 1) + [frames - per_packet * (len(packets) - 1)]
-        stts = box('stts', bytes(4) + U32(len(packets)) + b''.join(U32(1) + U32(n) for n in durations))
+        stts = box('stts', bytes(4) + U32(len(packets)) + b''.join(U32(1) + U32(n * media_scale // rate) for n in durations))
         runs = [(1, len(chunk_groups[0]), 1)]
         if len(chunk_groups) > 1 and len(chunk_groups[0]) != 1:
             runs.append((2, 1, 1))
@@ -127,13 +129,13 @@ def mp4(cookie, packets, frames, co64=False, last=False, trim=None, smpb=None, s
         if backwards and len(offsets) > 1:
             offsets[1] = offsets[0]
         offset_box = box('co64' if co64 else 'stco', bytes(4) + U32(len(offsets)) + b''.join((U64 if co64 else U32)(p) for p in offsets))
-        mdhd = box('mdhd', bytes(12) + U32(rate) + U32(frames) + bytes(4))
+        mdhd = box('mdhd', bytes(12) + U32(media_scale) + U32(frames * media_scale // rate) + bytes(4))
         hdlr = box('hdlr', bytes(8) + b'soun' + bytes(12))
         stbl = box('stbl', stsd + stts + stsc + stsz + offset_box)
         edts = b''
         if trim is not None:
             delay, count = trim
-            edts = box('edts', box('elst', bytes(4) + U32(1) + struct.pack('!IiI', count, delay, 0x10000)))
+            edts = box('edts', box('elst', bytes(4) + U32(1) + struct.pack('!IiI', count * movie_scale // rate, delay * media_scale // rate, 0x10000)))
         tkhd = b''
         extra = b''
         if complete:
@@ -145,11 +147,12 @@ def mp4(cookie, packets, frames, co64=False, last=False, trim=None, smpb=None, s
         video = box('trak', box('mdia', box('hdlr', bytes(8) + b'vide' + bytes(12)) + box('minf', box('stbl', box('stsz', bytes(4) + U32(7) + U32(1)))))) if second else b''
         metadata = b''
         if smpb:
-            delay, padding = smpb
-            text = f' 00000000 {delay:08X} {padding:08X} {frames:016X}'.encode()
+            delay, padding = smpb[:2]
+            original = smpb[2] if len(smpb) > 2 else frames
+            text = f' 00000000 {delay:08X} {padding:08X} {original:016X}'.encode()
             item = box('----', box('mean', bytes(4) + b'com.apple.iTunes') + box('name', bytes(4) + b'iTunSMPB') + box('data', bytes(8) + text))
             metadata = box('udta', box('meta', bytes(4) + box('ilst', item)))
-        mvhd = box('mvhd', bytes(12) + U32(rate) + U32(frames) + bytes(80))
+        mvhd = box('mvhd', bytes(12) + U32(movie_scale) + U32(frames * movie_scale // rate) + bytes(80))
         return box('moov', mvhd + video + trak + metadata, wide=wide)
     if last:
         media_box = box('mdat', bytes(media), wide=wide)

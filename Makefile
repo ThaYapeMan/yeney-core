@@ -62,6 +62,7 @@ test: test-speaker format-check clock-unit shm-unit all unit-test test-player de
 	./shm-unit
 	python3 tests/fake_lms.py
 	python3 tests/decoders_test.py
+	python3 tests/length_test.py
 	python3 tests/device_script_test.py
 	python3 tests/shm_test.py
 	python3 tests/transitions_test.py

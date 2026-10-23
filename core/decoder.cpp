@@ -573,7 +573,7 @@ class AlacWorker : public Worker {
     void decode() override {
         ALACDecoder apple;
         Mp4Info info;
-        uint64_t position = 0;
+        uint64_t position = 0, packetNumber = 0;
         std::vector<uint8_t> output;
         Mp4Demuxer demux(
             [&](const Mp4Info &h) {
@@ -606,9 +606,14 @@ class AlacWorker : public Worker {
                     throw std::runtime_error("unsupported ALAC packet element");
                 if (field(19, 1)) {
                     uint32_t count = field(23, 32);
+                    if (!count && cfg.finitePcmContainers && packetNumber + 1 == info.packetCount) {
+                        ++packetNumber;
+                        return; // A final padding-only ALAC packet is legal.
+                    }
                     if (!count || count > info.framesPerPacket)
                         throw std::runtime_error("ALAC partial frame count exceeds cookie");
                 }
+                ++packetNumber;
                 Bytes padded = packet;
                 padded.resize(packet.size() + 64, 0);
                 BitBuffer bits{};

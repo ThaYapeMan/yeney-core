@@ -307,7 +307,10 @@ struct Mp4Demuxer::Impl {
             (info.format.bits != 16 && info.format.bits != 20 && info.format.bits != 24 &&
              info.format.bits != 32))
             bad("invalid ALAC cookie");
+        info.packetCount = t.sizes.size();
         info.totalFrames = mul(t.ticks, info.format.rate) / t.timescale;
+        if (partialMedia)
+            info.totalFrames = std::min(info.totalFrames, mul(info.packetCount, info.framesPerPacket));
         info.trimEnd = info.totalFrames;
         size_t sample = 0, run = 0;
         uint64_t previousEnd = 0;
@@ -346,14 +349,39 @@ struct Mp4Demuxer::Impl {
                 info.trimEnd = std::min(info.totalFrames,
                                         add(info.trimBegin, mul(e.duration, info.format.rate) / movieScale));
             }
-        if (!edit && !smpb.empty()) {
-            uint64_t reserved, delay, padding;
+        if (!smpb.empty()) {
+            uint64_t reserved, delay, padding, original = 0;
             std::istringstream text(smpb);
             text >> std::hex >> reserved >> delay >> padding;
             if (!text)
                 bad("invalid iTunSMPB");
-            info.trimBegin = std::min(info.totalFrames, delay);
-            info.trimEnd = std::max(info.trimBegin, info.totalFrames - std::min(info.totalFrames, padding));
+            text >> original; // Older writers may omit the original count.
+            const auto capacity = mul(info.packetCount, info.framesPerPacket);
+            const bool originalFits = partialMedia && original && delay <= info.totalFrames &&
+                                      original <= info.totalFrames - delay &&
+                                      padding <= capacity - std::min(capacity, add(delay, original));
+            if (!edit) {
+                info.trimBegin = std::min(info.totalFrames, delay);
+                // stts may already exclude encoder padding. Never subtract it
+                // twice when iTunSMPB supplies the actual original sample count.
+                info.trimEnd =
+                    originalFits
+                        ? add(delay, original)
+                        : std::max(info.trimBegin, info.totalFrames - std::min(info.totalFrames, padding));
+            } else if (originalFits) {
+                const auto originalEnd = add(delay, original);
+                // Movie-duration ticks can be coarser than audio samples. An
+                // aligned edit within one movie tick selects the precise count.
+                const auto tick = (uint64_t(info.format.rate) + movieScale - 1) / movieScale;
+                if (info.trimBegin == delay &&
+                    (info.trimEnd > originalEnd ? info.trimEnd - originalEnd : originalEnd - info.trimEnd) <
+                        tick)
+                    info.trimEnd = originalEnd;
+                else {
+                    info.trimBegin = std::max(info.trimBegin, delay);
+                    info.trimEnd = std::max(info.trimBegin, std::min(info.trimEnd, originalEnd));
+                }
+            }
         }
         selected = true;
         onHeader(info);

@@ -17,6 +17,9 @@ int main(int argc, char **argv) {
         yeney::DecoderConfig cfg;
         cfg.codec = argv[1][0];
         cfg.finitePcmContainers = true;
+        if (std::getenv("YENEY_TEST_NATIVE_RATE"))
+            cfg.maxRate = 192000;
+        cfg.flacLog = [](const auto &line) { std::cout << line << '\n'; };
         if (std::getenv("YENEY_TEST_DECIMATE")) {
             cfg.maxRate = 192000;
             cfg.convertToRate = 48000;
@@ -41,7 +44,8 @@ int main(int argc, char **argv) {
         bool eof = false;
         uint64_t frames = 0;
         bool printed = false;
-        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+        auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::seconds(std::getenv("YENEY_TEST_NATIVE_RATE") ? 120 : 20);
         while (true) {
             if (std::chrono::steady_clock::now() > deadline)
                 throw std::runtime_error("decoder timeout");
