@@ -395,7 +395,6 @@ size_t QueueMode::decodeRoom(const Track &t, size_t room) const {
     return room;
 }
 bool QueueMode::decodeComplete(Track &t, std::string &error) {
-    auto &p = state;
     // Observe completion before its error: the worker publishes the
     // error before done. Reuse this snapshot below so a completion
     // racing this poll cannot bypass queue fault handling.
