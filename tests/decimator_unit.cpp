@@ -79,11 +79,23 @@ int main() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
         }
-        for (size_t j = 0; j < decoders.size(); ++j) {
-            Frame block[1024];
-            size_t n;
-            while ((n = decoders[j]->take(block, 1024)))
-                outputs[j].insert(outputs[j].end(), block, block + n);
+        // A temporarily empty nonblocking output is not worker completion.
+        // Earlier tracks may still be publishing their successor-assisted tail.
+        const auto drainedBy = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (true) {
+            bool complete = true;
+            for (size_t j = 0; j < decoders.size(); ++j) {
+                Frame block[1024];
+                size_t n;
+                while ((n = decoders[j]->take(block, 1024)))
+                    outputs[j].insert(outputs[j].end(), block, block + n);
+                assert(decoders[j]->error().empty());
+                complete = complete && decoders[j]->done() && !decoders[j]->outputBuffered();
+            }
+            if (complete)
+                break;
+            assert(std::chrono::steady_clock::now() < drainedBy);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         uint64_t total = 0;
         for (unsigned i = 0; i < 4; ++i) {
