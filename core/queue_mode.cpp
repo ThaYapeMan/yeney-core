@@ -101,6 +101,7 @@ bool QueueMode::audibleEvents() {
     if (!sink.decodeAhead())
         return false;
     if (sink.takeQueueFailure()) {
+        faults.clear(); // The relay has reported the failed tail; never report it twice.
         stat("STMn");
         p.playing = p.paused = false;
         p.ended = true;
