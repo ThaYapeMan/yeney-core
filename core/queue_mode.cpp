@@ -400,19 +400,8 @@ bool QueueMode::decodeComplete(Track &t, std::string &error) {
     const bool queueComplete = sink.decodeAhead() && t.decoder->done();
     if (queueComplete)
         error = t.decoder->error();
-    if (queueComplete && !error.empty()) {
-        const auto exact = t.decoder->exactFrames();
-        if (t.produced && exact && *exact > t.produced && *exact - t.produced <= t.format.rate) {
-            const auto shortfall = *exact - t.produced;
-            t.output.insert(t.output.end(), shortfall, Frame{});
-            p.queued += shortfall;
-            t.produced += shortfall;
-            const auto message = "source-short " + std::to_string(shortfall) + " frames";
-            log(message);
-            sink.coreEvent("fault:" + message, t.descriptor.occurrence, t.produced);
-        } else
-            throw std::runtime_error(error);
-    }
+    if (queueComplete && !error.empty())
+        throw std::runtime_error(error); // bounded EOF repair already ran before DSP
     bool complete = sink.decodeAhead() ? queueComplete : t.decoder->done();
     if (sink.decodeAhead() && complete && !t.produced)
         throw std::runtime_error("source-empty");

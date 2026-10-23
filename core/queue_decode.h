@@ -6,6 +6,7 @@
 
 #pragma once
 #include "decoder.h"
+#include <algorithm>
 namespace yeney::detail {
 // The sole queue-capability decoder policy. Strict stream defaults and source
 // metadata/counting are preserved; no PCM synthesis or DSP lives here.
@@ -21,6 +22,18 @@ struct QueueDecodePolicy {
     static bool partialMp4(bool enabled, bool selected, bool inMedia, bool allPackets) {
         return enabled && selected && (inMedia || allPackets);
     }
+};
+// Queue-only promised-length reconciliation, before any resampling or mixing.
+class QueueSourceLength {
+    uint64_t produced = 0, removed = 0;
+    unsigned packet = 0;
+    static bool enabled(const DecoderConfig &);
+
+public:
+    void packetFrames(unsigned n) { packet = std::max(packet, n); }
+    bool accept(const DecoderConfig &, std::optional<uint64_t>);
+    uint64_t finish(const DecoderConfig &, std::optional<uint64_t>, unsigned rate, bool eof,
+                    std::string &error);
 };
 class QueueFlacSource {
     uint64_t total = 0;

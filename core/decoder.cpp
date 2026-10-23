@@ -38,6 +38,7 @@ class Worker : public Decoder {
     Format format_;
     std::optional<uint64_t> exactFrames_;
     std::string error_;
+    detail::QueueSourceLength sourceLength_;
 
 protected:
     DecoderConfig cfg;
@@ -45,20 +46,39 @@ protected:
     virtual void decode() = 0;
     void start() {
         thread_ = std::thread([this] {
+            std::string problem;
+            bool cancelled = false;
             try {
                 decode();
             } catch (const Cancelled &) {
+                cancelled = true;
             } catch (const std::exception &e) {
-                std::lock_guard<std::mutex> lock(mutex_);
-                error_ = e.what();
+                problem = e.what();
+            }
+            if (!cancelled) {
+                try {
+                    bool ended;
+                    {
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        ended = eof_ && !bytes_.size();
+                    }
+                    auto padding = sourceLength_.finish(cfg, exactFrames_, format_.rate, ended, problem);
+                    while (padding--)
+                        emit(Frame{});
+                } catch (const Cancelled &) {
+                } catch (const std::exception &e) {
+                    problem = e.what();
+                }
             }
             {
                 std::lock_guard<std::mutex> lock(mutex_);
+                error_ = problem;
                 done_ = true;
             }
             cv_.notify_all();
         });
     }
+    void packetFrames(unsigned n) { sourceLength_.packetFrames(n); }
     void cancel() {
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -107,6 +127,8 @@ protected:
     }
     void emit(Frame f) {
         std::unique_lock<std::mutex> lock(mutex_);
+        if (!sourceLength_.accept(cfg, exactFrames_))
+            return;
         cv_.wait(lock, [&] { return cancel_ || frames_.free(); });
         if (cancel_)
             throw Cancelled{};
@@ -398,6 +420,7 @@ class FlacWorker : public Worker {
                                  [&w](uint64_t frames) { w.setExactFrames(frames); });
             }
             w.setFormat(format);
+            w.packetFrames(f->header.blocksize);
             w.hadFrame = true;
             for (unsigned i = 0; i < f->header.blocksize; ++i)
                 w.emit({int32_t(uint32_t(samples[0][i]) << (32 - format.bits)),
@@ -413,6 +436,7 @@ class FlacWorker : public Worker {
         if (m->type == FLAC__METADATA_TYPE_STREAMINFO && m->data.stream_info.total_samples) {
             auto &w = *static_cast<FlacWorker *>(self);
             w.source.metadata(m->data.stream_info.total_samples, m->data.stream_info.max_blocksize);
+            w.packetFrames(m->data.stream_info.max_blocksize);
         }
     }
     static void errorCb(const FLAC__StreamDecoder *, FLAC__StreamDecoderErrorStatus status, void *self) {
@@ -581,6 +605,7 @@ class AlacWorker : public Worker {
                 if (info.format.channels > 2)
                     throw std::runtime_error("ALAC: more than 2 channels unsupported");
                 setFormat(info.format);
+                packetFrames(info.framesPerPacket);
                 setExactFrames(info.trimEnd - info.trimBegin);
                 if (apple.Init(info.cookie.data(), info.cookie.size()))
                     throw std::runtime_error("ALAC cookie initialization failed");
@@ -634,6 +659,9 @@ class AlacWorker : public Worker {
         while (size_t n = read(bytes, sizeof(bytes)))
             demux.feed(bytes, n);
         demux.finish();
+        if (cfg.finitePcmContainers && position > info.totalFrames && cfg.flacLog)
+            cfg.flacLog("source-long truncated " + std::to_string(position - info.totalFrames) +
+                        " source frames");
         if (position < info.trimEnd)
             throw std::runtime_error("ALAC packets end before declared trim range");
     }

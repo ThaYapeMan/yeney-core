@@ -2,7 +2,7 @@
 """Independent synthetic M4A length fixtures; private media decoded only to /dev/null."""
 import math,os,re,struct,subprocess,tempfile,unittest
 from pathlib import Path
-from decoders_test import mp4
+from decoders_test import mp4, alac_parts
 ROOT=Path(__file__).resolve().parents[1]
 def alac(values,rate,*,declared=None,trim=None,smpb=None,zero_tail=False,packet_size=4096,movie_scale=None,media_scale=None):
     packets=[]
@@ -46,6 +46,22 @@ class Lengths(unittest.TestCase):
                 values=signal(8192);path.write_bytes(alac(values,rate,declared=12288,smpb=(0,4096,8192),zero_tail=True))
                 result=decode(path,out);self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(out.read_bytes(),raw(values));self.assertIn('EXACT 8192',result.stdout)
         print('PASS queue M4A lengths: 44.1/88.2/96 kHz, elst media_time/duration/scales, iTunSMPB original/priming/padding, cookie frameLength, short/zero final packets; exact PCM counts',flush=True)
+    def test_alac_bounds(self):
+        with tempfile.TemporaryDirectory(prefix='yeney-length-bounds-') as d:
+            d=Path(d);path=d/'test.m4a';out=d/'out.raw'
+            for rate in (44100,88200,96000):
+                values=signal(9216);path.write_bytes(alac(values,rate,declared=12288))
+                result=decode(path,out);self.assertEqual(result.returncode,0,result.stderr)
+                self.assertEqual(out.read_bytes(),raw(values)+bytes(3072*8));self.assertIn('source-short padded 3072 frames',result.stdout);self.assertIn('EXACT 12288',result.stdout)
+                result=decode(path,out,True);self.assertEqual(result.returncode,0,result.stderr)
+                factor=1 if rate==44100 else 2;self.assertIn('source-short padded '+str(3072//factor)+' frames',result.stdout)
+                full=alac(signal(16384),rate);cookie,packets=alac_parts(full);path.write_bytes(full[:-sum(map(len,packets[-2:]))])
+                result=decode(path,out);self.assertNotEqual(result.returncode,0);self.assertIn('source-short 8192 frames',result.stderr)
+                values=signal(10386);path.write_bytes(alac(values,rate,declared=10000));result=decode(path,out)
+                self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(out.read_bytes(),raw(values[:10000]));self.assertIn('source-long truncated 386',result.stdout)
+            path.write_bytes(alac(signal(11384),44100,declared=16384,packet_size=8192))
+            result=decode(path,out);self.assertNotEqual(result.returncode,0);self.assertIn('source-short 5000 frames',result.stderr)
+        print('PASS ALAC EOF length policy: one-packet silence repair before decimation, exact published count, >packet and >100 ms faults, source-long truncation',flush=True)
     def test_private(self):
         directory=Path('/mnt/c/HueSyncLXC/private-fixtures')
         files=sorted(p for p in directory.glob('*') if p.suffix.lower() in ('.m4a','.flac')) if directory.is_dir() else []
