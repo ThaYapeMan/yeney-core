@@ -130,6 +130,7 @@ struct Player::Impl {
     bool cachedRun = false;
     uint64_t contentLength = std::numeric_limits<uint64_t>::max();
     std::string headers;
+    bool connectionObserved = false;
     bool controlConnecting = false, httpConnecting = false, haveHeaders = false, everConnected = false;
     bool submittedSinceFlush = false;
     bool underrun = false, power = true;
@@ -261,6 +262,7 @@ struct Player::Impl {
     void disconnect() {
         control.reset();
         controlConnecting = false;
+        connectionObserved = false;
         resolution.reset();
         outbound.clear();
         parser = ServerParser{};
@@ -400,6 +402,16 @@ struct Player::Impl {
         if (got > 0) {
             try {
                 for (auto &msg : parser.feed(b, got)) {
+                    if (!connectionObserved) {
+                        connectionObserved = true;
+                        if (cfg.connectionReady) {
+                            try {
+                                cfg.connectionReady(inet_ntoa(server.sin_addr));
+                            } catch (...) {
+                                log("connection observer failed");
+                            }
+                        }
+                    }
                     command(msg);
                     if (control.fd < 0)
                         break;

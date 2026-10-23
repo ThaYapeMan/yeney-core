@@ -37,6 +37,9 @@ struct Config {
     size_t earlyMediaBytes = 256ull * 1024 * 1024;
     size_t streamBytes = 256 * 1024, outputFrames = 48000 * 8;
     std::function<void(const std::string &)> log;
+    // Once after the first complete server message following HELO. Resolved
+    // numeric peer address; observer must enqueue work and return immediately.
+    std::function<void(const std::string &)> connectionReady;
     // Event-loop callback, before processing every complete strm command.
     // Must not block or call back into Player.
     std::function<void(const Command &)> observeCommand;
