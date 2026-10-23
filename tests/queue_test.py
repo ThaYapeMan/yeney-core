@@ -84,7 +84,8 @@ class QueueTests(unittest.TestCase):
                 self.assertFalse(any(p.get('event') == 'STMn' for p in s.lms.packets))
                 self.assertEqual(s.data(), expected)
                 if name == 'short':
-                    self.assertTrue(any('source-short 3825 frames' in x for x in s.events()))
+                    self.assertIn('source-short padded 3825 frames', s.base.with_suffix('.log').read_text())
+                    self.assertFalse(any(x.startswith('fault:source-short') for x in s.events()))
         # A valid rewritten header with no decodable samples has no last
         # decoded frame after which to pad: it must never manufacture STMs.
         stream = (root/'queue-alac-seek.m4a').read_bytes()

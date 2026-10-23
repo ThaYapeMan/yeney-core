@@ -248,16 +248,17 @@ void QueueMode::configureDecoder(Track &t, DecoderConfig &c) {
     if (sink.decodeAhead())
         sink.coreEvent("codec:" + std::string(1, c.codec), t.descriptor.occurrence, p.submitted);
     c.finitePcmContainers = sink.decodeAhead();
-    if (sink.decodeAhead() && cfg.flacSourceInfo) {
+    if (sink.decodeAhead()) {
         const auto id = t.descriptor.occurrence;
         auto *config = &cfg;
         c.flacLog = [config, id](const std::string &text) {
             if (config->log)
                 config->log("queue FLAC occurrence=" + std::to_string(id) + " " + text);
         };
-        c.flacSourceInfo = [config, id](std::optional<FlacSourceInfo> info) {
-            return config->flacSourceInfo(id, info);
-        };
+        if (cfg.flacSourceInfo)
+            c.flacSourceInfo = [config, id](std::optional<FlacSourceInfo> info) {
+                return config->flacSourceInfo(id, info);
+            };
     }
     c.transcoded = cfg.sourceIsTranscoded && cfg.sourceIsTranscoded(t.descriptor.occurrence);
 }
