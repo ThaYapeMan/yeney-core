@@ -165,3 +165,12 @@ acceptance, not a decoder failure inferred from received bytes.
 relay sink requires every promised frame to exist before STMd, independently
 of decoder EOF and asynchronous storage jobs. Remote time gating remains in
 the core; stream sinks retain their original completion path.
+
+A host selecting finite versus continuous output may defer every incoming
+start with `Config::deferQueueStart`, including while the continuous sink is
+active. The core retains the request without opening its HTTP connection;
+`takeQueueStart()` resumes it exactly once. Repeated queue starts are checked
+once, before deferral. At a confirmed drained class boundary the host may
+request `takePlaybackReset()` before resuming the retained start: this clears
+only playback buffers and sink state. It neither reconnects nor sends HELO.
+Ordinary stream sinks leave these hooks unset and retain the existing path.

@@ -68,6 +68,8 @@ public:
     // One-shot host authorization for an independent queue seek render. Only
     // decodeAhead + speakerDriven may cancel a producer without flushing assets.
     virtual bool takeQueueRefetch() { return false; }
+    // Internal path handoff: discard drained playback state without HELO/reconnect.
+    virtual bool takePlaybackReset() { return false; }
     // Resume an already received strm s after host selection/readiness. No CLI
     // jump or server resend is needed; only managed queue sinks opt in.
     virtual bool takeQueueStart() { return false; }

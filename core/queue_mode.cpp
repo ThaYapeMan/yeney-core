@@ -210,6 +210,8 @@ std::optional<uint32_t> QueueMode::elapsed() const {
 bool QueueMode::remoteClock() const { return sink.decodeAhead() && sink.speakerDriven(); }
 bool QueueMode::defersDecoderErrors() const { return sink.decodeAhead(); }
 void QueueMode::reset() {
+    lastStart.clear();
+    nextStartCredits = 0;
     selectionPending = cachedConnectionPending = false;
     resumedAcknowledged = receivedAcknowledged = false;
     retainedTracks.clear();
@@ -255,7 +257,7 @@ void QueueMode::configureDecoder(Track &t, DecoderConfig &c) {
     c.transcoded = cfg.sourceIsTranscoded && cfg.sourceIsTranscoded(t.descriptor.occurrence);
 }
 void QueueMode::receivedStartCommand(const Bytes &request) {
-    if (sink.decodeAhead()) {
+    if (sink.decodeAhead() || cfg.deferQueueStart) {
         receivedStart = request;
         receivedAcknowledged = false;
     }

@@ -433,6 +433,8 @@ struct Player::Impl {
             if (b[4] == 's')
                 queue.receivedStartCommand(b);
             queue.commandObserved(char(b[4]));
+            if (b[4] == 's' && cfg.deferQueueStart && queue.repeatedStart(b))
+                return;
             if (cfg.observeCommand)
                 cfg.observeCommand({char(b[4]), value, playing && !paused && submittedSinceFlush});
             if (b[4] == 's' && queue.deferStart())
@@ -484,7 +486,7 @@ struct Player::Impl {
                 }
                 break;
             case 's':
-                if (queue.repeatedStart(b))
+                if (!cfg.deferQueueStart && queue.repeatedStart(b))
                     break;
                 start(b);
                 break;
@@ -1003,6 +1005,8 @@ struct Player::Impl {
             queue.pollGeneration();
             uint32_t now = jiffies();
             controlStep(now);
+            if (sink.takePlaybackReset())
+                clear(true);
             if (auto pending = queue.takeStart(); !pending.empty())
                 start(pending);
             if (auto cached = queue.takeCachedStart(); !cached.empty())
