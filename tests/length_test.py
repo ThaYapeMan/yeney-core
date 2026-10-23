@@ -90,6 +90,15 @@ class Lengths(unittest.TestCase):
                 result=subprocess.run([str(ROOT/'decoder-test'),'f',str(path),str(out)],env=dict(os.environ,YENEY_TEST_STRICT='1',YENEY_TEST_NATIVE_RATE='1'),capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(out.read_bytes(),raw(values));self.assertNotIn('padded',result.stdout)
         print('PASS FLAC EOF length policy: STREAMINFO vs actual output, block-sized bounded silence, large-short fault, long-source truncation, exact native/decimated counts; strict stream PCM unchanged',flush=True)
+    def test_strict_edit_precedence(self):
+        with tempfile.TemporaryDirectory(prefix='yeney-length-strict-') as d:
+            d=Path(d);values=signal(10386)
+            data=alac(values,44100,trim=(117,10036),smpb=(0,0,len(values)))
+            pos=data.index(b' 00000000');data=data[:pos+1]+b'ZZZZZZZZ'+data[pos+9:]
+            path=d/'test.m4a';path.write_bytes(data);out=d/'out.raw'
+            result=subprocess.run([str(ROOT/'decoder-test'),'l',str(path),str(out)],env=dict(os.environ,YENEY_TEST_STRICT='1'),capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(out.read_bytes(),raw(values[117:10153]))
+        print('PASS strict stream M4A edit precedence unchanged: ignored malformed gapless metadata cannot override an edit',flush=True)
     def test_private(self):
         directory=Path('/mnt/c/HueSyncLXC/private-fixtures')
         files=sorted(p for p in directory.glob('*') if p.suffix.lower() in ('.m4a','.flac')) if directory.is_dir() else []

@@ -349,7 +349,7 @@ struct Mp4Demuxer::Impl {
                 info.trimEnd = std::min(info.totalFrames,
                                         add(info.trimBegin, mul(e.duration, info.format.rate) / movieScale));
             }
-        if (!smpb.empty()) {
+        if ((!edit || partialMedia) && !smpb.empty()) {
             uint64_t reserved, delay, padding, original = 0;
             std::istringstream text(smpb);
             text >> std::hex >> reserved >> delay >> padding;
