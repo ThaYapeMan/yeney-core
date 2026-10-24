@@ -282,7 +282,8 @@ struct Player::Impl {
             fetching->decoded = true;
             fetching->decoder.reset();
         }
-        if (!queue.deferFault() && (!queue.defersDecoderErrors() || !received))
+        if (!queue.deferFault() && (!queue.defersDecoderErrors() || !received) &&
+            !(cfg.queueHostFailures && sink.decodeAhead()))
             stat("STMn");
         if (connectedStream)
             send("DSCO", Bytes{reason});

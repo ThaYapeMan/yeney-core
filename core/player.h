@@ -27,6 +27,8 @@ struct Config {
     // Managed finite queues delay remote successor admission until near the
     // speaker-confirmed end. No effect on ordinary stream sinks.
     unsigned queueNextDelayMs = 20000;
+    // A renderer host may classify failures before authorising STMn.
+    bool queueHostFailures = false;
     bool queueRelativeClock = false; // LMS adds its selected seek offset itself
     std::function<bool(uint64_t)> queueRemoteSource;
     std::function<bool()> deferQueueStart; // host mode choice; retain the received request
