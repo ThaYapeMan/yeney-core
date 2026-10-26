@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""Synthetic length fixtures; optional owner media requires an explicit fixture path."""
+"""Synthetic length fixtures and read-only owner media selected by the caller."""
 import math,os,re,struct,subprocess,tempfile,unittest
 from pathlib import Path
 from decoders_test import mp4, alac_parts
@@ -102,9 +102,10 @@ class Lengths(unittest.TestCase):
     def test_private(self):
         configured=os.environ.get('YENEY_LENGTH_FIXTURE_DIR')
         if not configured:
-            print('SKIP owner-file length check: YENEY_LENGTH_FIXTURE_DIR unset; synthetic fixtures only',flush=True);return
+            print('SKIP owner-file length check: YENEY_LENGTH_FIXTURE_DIR empty/unset (disabled or no default directory exists); synthetic fixtures only',flush=True);return
         directory=Path(configured)
-        files=sorted(p for p in directory.glob('*') if p.suffix.lower() in ('.m4a','.flac')) if directory.is_dir() else []
+        self.assertTrue(directory.is_dir(), 'YENEY_LENGTH_FIXTURE_DIR is not an existing directory')
+        files=sorted(p for p in directory.glob('*') if p.is_file() and p.suffix.lower() in ('.m4a','.flac'))
         if not files:
             self.fail('YENEY_LENGTH_FIXTURE_DIR contains no M4A/FLAC files')
         for path in files:
@@ -114,8 +115,8 @@ class Lengths(unittest.TestCase):
                     env=dict(os.environ,YENEY_TEST_NATIVE_RATE='1')
                     if converted:env['YENEY_TEST_DECIMATE']='1'
                     result=subprocess.run([str(ROOT/'decoder-test'),'f',str(path),'/dev/null'],env=env,capture_output=True,text=True)
-                self.assertEqual(result.returncode,0,(str(path),result.stdout,result.stderr))
-                exact=int(re.search(r'^EXACT (\d+)$',result.stdout,re.M)[1]);frames=int(re.search(r'^FRAMES (\d+)$',result.stdout,re.M)[1]);self.assertEqual(exact,frames,str(path))
-                self.assertNotIn('source-short padded',result.stdout,str(path))
-                print(f'PASS owner-file length check: {path} {"output-rate" if converted else "native"} derived={exact} decoded={frames}; output discarded to /dev/null, no copies/excerpts',flush=True)
+                self.assertEqual(result.returncode,0,(path.name,result.returncode))
+                exact=int(re.search(r'^EXACT (\d+)$',result.stdout,re.M)[1]);frames=int(re.search(r'^FRAMES (\d+)$',result.stdout,re.M)[1]);self.assertEqual(exact,frames,path.name)
+                self.assertNotIn('source-short padded',result.stdout,path.name)
+                print(f'PASS owner-file length check: {path.name} {"output-rate" if converted else "native"} derived={exact} decoded={frames}; output discarded to /dev/null, no copies/excerpts',flush=True)
 if __name__=='__main__':unittest.main(verbosity=2)
