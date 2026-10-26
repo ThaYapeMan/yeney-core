@@ -798,6 +798,9 @@ struct Player::Impl {
             size_t room = outputCapacity() - queued;
             room = queue.decodeRoom(t, room);
             size_t count = t.decoder->take(frames, std::min(size_t(1024), room));
+            if (count && !t.produced && sink.decodeAhead() && cfg.log)
+                cfg.log("queue decode occurrence=" + std::to_string(t.descriptor.occurrence) +
+                        " first audio");
             t.produced += count;
             t.output.insert(t.output.end(), frames, frames + count);
             queued += count;

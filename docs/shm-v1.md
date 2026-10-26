@@ -109,10 +109,14 @@ and inode reuse, multiple laps, rounded samples, rates, lifecycle and lock gaps.
 An independent Python reader validates fake-LMS PCM across gapless and rate changes.
 The unmodified LampaStream SqueezeliteShmStereoSource(require_v1=True) receives the
 same data, including exact sample-position checks and the expected rate invalidation.
-Missing sibling checkout or Python dependencies prints an explicit SKIP.
+A missing checkout or failed consumer import fails the test. Set
+`LAMPASTREAM_CHECKOUT` to the real checkout; the bridge's `make test` defaults
+it to `../LampaStream` relative to the bridge root. There is no alias fallback.
+Only `LAMPASTREAM_CONSUMER=off` opts out, and the final summary prints
+`CROSS-REPO CONSUMER NOT RUN (LAMPASTREAM_CONSUMER=off)` explicitly.
+The consumer path and tested Git commit appear in both the consumer and PASS
+lines. Imports do not write bytecode into the consumer checkout.
 
-The local checkout is named ../SqueezeHue but its origin is ThaYapeMan/LampaStream;
-the cross-repo test recognizes that verified alias after checking ../LampaStream.
 No consumer code is copied or modified. The device script retains all prior phases
 and adds FLAC with -v, 11 stable snapshots over ten seconds, generation/rate checks
 and a 5% frame-position pacing check. `shm-extension.txt` includes all 40 extension

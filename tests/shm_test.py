@@ -7,9 +7,13 @@ import os
 import select
 from pathlib import Path
 import struct
+import subprocess
 import sys
 import time
 import unittest
+
+# Import the real read-only checkout without creating bytecode in it.
+sys.dont_write_bytecode = True
 from fake_lms import Session, pcm
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -201,32 +205,26 @@ class ShmTests(unittest.TestCase):
         self.exercise_tracks()
 
     def test_03_real_lampastream_consumer(self):
+        if os.environ.get('LAMPASTREAM_CONSUMER') == 'off':
+            self.skipTest('explicit LAMPASTREAM_CONSUMER=off')
         checkout = Path(os.environ.get('LAMPASTREAM_CHECKOUT', ROOT.parent / 'LampaStream'))
-        if 'LAMPASTREAM_CHECKOUT' in os.environ:
-            self.assertTrue(checkout.is_dir(), 'explicit LampaStream checkout missing')
-        if not checkout.exists():
-            alias = ROOT.parent / 'SqueezeHue'
-            if alias.exists():
-                import subprocess
-                remote = subprocess.run(['git', '-C', str(alias), 'remote', 'get-url', 'origin'],
-                                        capture_output=True, text=True).stdout
-                if 'ThaYapeMan/LampaStream' in remote:
-                    checkout = alias
-        if not checkout.exists():
-            print('SKIP cross-repo LampaStream consumer: sibling checkout missing', flush=True)
-            self.skipTest('LampaStream checkout missing')
+        self.assertTrue(checkout.is_dir(), 'LampaStream checkout missing: '+str(checkout))
         sys.path.insert(0, str(checkout / 'src'))
         try:
             from lampastream import pcm_source
         except ImportError as e:
-            if 'LAMPASTREAM_CHECKOUT' in os.environ:
-                self.fail(f'explicit LampaStream consumer import failed: {e}')
-            print(f'SKIP cross-repo LampaStream consumer: Python dependency unavailable: {e}', flush=True)
-            self.skipTest(str(e))
-        print(f'Cross-repo consumer: {checkout}/src/lampastream/pcm_source.py (require_v1=True)', flush=True)
+            self.fail(f'LampaStream consumer import failed: {e}')
+        self.assertEqual(Path(pcm_source.__file__).resolve(),
+                         (checkout/'src/lampastream/pcm_source.py').resolve(),
+                         'LampaStream consumer imported from unexpected checkout')
+        revision = subprocess.check_output(['git','-C',str(checkout),'rev-parse','--short','HEAD'],text=True).strip()
+        print(f'Cross-repo consumer: {checkout}/src/lampastream/pcm_source.py commit={revision} (require_v1=True)', flush=True)
         self.exercise_tracks(pcm_source)
-        print('PASS cross-repo LampaStream SHM consumer (require_v1=True)', flush=True)
+        print(f'PASS cross-repo LampaStream SHM consumer (require_v1=True) commit={revision}', flush=True)
 
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    result = unittest.main(verbosity=2, exit=False).result
+    if os.environ.get('LAMPASTREAM_CONSUMER') == 'off':
+        print('CROSS-REPO CONSUMER NOT RUN (LAMPASTREAM_CONSUMER=off)',flush=True)
+    raise SystemExit(0 if result.wasSuccessful() else 1)

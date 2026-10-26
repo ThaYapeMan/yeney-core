@@ -193,4 +193,6 @@ no PCM file writing is timed. Gapless counts are checked in every trial.
 
 The cross-repository SHM test normally finds a sibling LampaStream checkout.
 Set `LAMPASTREAM_CHECKOUT=/path/to/LampaStream` to use another real checkout,
-including a temporary clone; its consumer remains unmodified.
+including a temporary clone; its consumer remains unmodified. A missing checkout
+or failed import is a failure unless `LAMPASTREAM_CONSUMER=off` explicitly opts
+out; that choice is printed in the final summary.

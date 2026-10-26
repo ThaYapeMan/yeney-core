@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Jaap van Vliet
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
+export TMPDIR ?= /var/tmp
+
 CXX ?= g++
 AR ?= ar
 CPPFLAGS += -I.
