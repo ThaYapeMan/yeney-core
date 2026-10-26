@@ -24,8 +24,8 @@ formats. Run as root on the bridge host from the yeney-core checkout after
 
   python3 scripts/core-device-test.py [--lms <host>] [--no-capture] [--keep-player]
 
-Everything is written to /tmp/core-test-<timestamp>/ and packed into
-/tmp/core-test-<timestamp>.tar.gz: report.txt, player.log, lms-status.log,
+Scratch uses $TMPDIR (or /var/tmp) and is removed on exit. The last five
+archives remain under $YENEY_TEST_CACHE/core-device (default ~/.cache/yeney-test): report.txt, player.log, lms-status.log,
 lms-events.log, slimproto.pcap, slimproto.txt (decoded capture), run-info.txt,
 shm-extension.txt (11 extension hex dumps over 10 seconds), and transition WAVs.
 An SHM phase checks ABI, generation, rate and pacing. Final WAV phases compare
@@ -37,6 +37,7 @@ import array
 import math
 import mmap
 import os
+from pathlib import Path
 import re
 import shutil
 import signal
@@ -45,6 +46,7 @@ import struct
 import subprocess
 import sys
 import tarfile
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -179,19 +181,22 @@ class EventListener:
     def __init__(self, host, path):
         self.log = open(path, "w")
         self.sock = None
+        self.worker = None
         try:
             self.sock = socket.create_connection((host, CLI_PORT), timeout=5)
             self.sock.sendall(b"listen 1\n")
             self.sock.settimeout(1)
-            threading.Thread(target=self._run, daemon=True).start()
+            self.worker = threading.Thread(target=self._run, daemon=True)
+            self.worker.start()
         except OSError as e:
             self.log.write(f"[{now()}] listen failed: {e}\n")
 
     def _run(self):
         buf = b""
+        connection = self.sock
         while self.sock:
             try:
-                chunk = self.sock.recv(65536)
+                chunk = connection.recv(65536)
             except socket.timeout:
                 continue
             except OSError:
@@ -208,7 +213,12 @@ class EventListener:
     def stop(self):
         s, self.sock = self.sock, None
         if s:
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             s.close()
+        if self.worker: self.worker.join()
         self.log.close()
 
 
@@ -284,10 +294,14 @@ class Capture:
         self.proc = subprocess.Popen(
             ["tcpdump", "-i", dev, "-s", "0", "-U", "-w", path, f"host {lms} and tcp port {SLIM_PORT}"],
             stdout=subprocess.DEVNULL, stderr=self.err)
-        time.sleep(1.5)
-        if self.proc.poll() is not None:
-            self.error = f"tcpdump exited ({self.proc.returncode}); see {os.path.basename(path)}.err"
-            self.proc = None
+        try:
+            time.sleep(1.5)
+            if self.proc.poll() is not None:
+                self.error = f"tcpdump exited ({self.proc.returncode}); see {os.path.basename(path)}.err"
+                self.proc = None
+        except BaseException:
+            self.stop()
+            raise
 
     def stop(self):
         if self.proc and self.proc.poll() is None:
@@ -297,6 +311,8 @@ class Capture:
                 self.proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+                self.proc.wait()
+        if hasattr(self, 'err'): self.err.close()
 
 
 def read_pcap(path):
@@ -762,9 +778,43 @@ def main():
     except OSError as e:
         sys.exit(f"LMS CLI not reachable on {lms}:{CLI_PORT}: {e}")
 
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    outdir = f"/tmp/core-test-{stamp}"
-    os.makedirs(outdir)
+    watched = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    previous = {sig: signal.getsignal(sig) for sig in watched}
+    def interrupted(number, frame):
+        for sig in watched: signal.signal(sig, signal.SIG_IGN)
+        raise KeyboardInterrupt
+    try:
+        for sig in watched: signal.signal(sig, interrupted)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        with tempfile.TemporaryDirectory(prefix=f"core-test-{stamp}-",
+                                         dir=os.environ.get("TMPDIR") or "/var/tmp") as outdir:
+            try:
+                return run_device(args, lms, cli, outdir)
+            finally:
+                for sig in watched: signal.signal(sig, signal.SIG_IGN)
+                archive_capture(outdir)
+    finally:
+        for sig, handler in previous.items(): signal.signal(sig, handler)
+
+
+def archive_capture(outdir):
+    cache = Path(os.environ.get("YENEY_TEST_CACHE") or Path.home()/".cache/yeney-test")/"core-device"
+    cache.mkdir(parents=True, exist_ok=True)
+    tarball = cache/(Path(outdir).name+".tar.gz")
+    fd, staged = tempfile.mkstemp(prefix=".capture-", suffix=".tar.gz", dir=cache)
+    os.close(fd)
+    try:
+        with tarfile.open(staged, "w:gz") as tar:
+            tar.add(outdir, arcname=Path(outdir).name)
+        os.replace(staged, tarball)
+    finally:
+        Path(staged).unlink(missing_ok=True)
+    for old in sorted(cache.glob("core-test-*.tar.gz"), key=lambda p:p.stat().st_mtime, reverse=True)[5:]:
+        old.unlink()
+    print(f"Tarball: {tarball}", flush=True)
+
+
+def run_device(args, lms, cli, outdir):
     disabled_formats = cli.raw("pref disabledformats ?")
     build = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     with open(os.path.join(outdir, "run-info.txt"), "w") as f:
@@ -773,16 +823,17 @@ def main():
                 f"initial_max_rate={MAX_RATE}\nnative_max_rate={NATIVE_MAX_RATE}\nshm_max_rate={MAX_RATE}\nshm_track=44436\nstarted={time.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     pcap = os.path.join(outdir, "slimproto.pcap")
-    capture = None if args.no_capture else Capture(lms, pcap)
-    events = EventListener(lms, os.path.join(outdir, "lms-events.log"))
-    player = PlayerProcess(lms, os.path.join(outdir, "player.log"))
-    run = Run(cli, player, outdir)
-    run.say(f"yeney-core {build or '?'}; LMS {lms}; player {PLAYER_NAME} ({PLAYER_MAC})")
-    prefs = PreferenceGuard(cli, run)
-    if capture and capture.error:
-        run.say(f"capture disabled: {capture.error}")
-
+    capture = events = player = run = prefs = None
     try:
+        capture = None if args.no_capture else Capture(lms, pcap)
+        events = EventListener(lms, os.path.join(outdir, "lms-events.log"))
+        player = PlayerProcess(lms, os.path.join(outdir, "player.log"))
+        run = Run(cli, player, outdir)
+        run.say(f"yeney-core {build or '?'}; LMS {lms}; player {PLAYER_NAME} ({PLAYER_MAC})")
+        prefs = PreferenceGuard(cli, run)
+        if capture and capture.error:
+            run.say(f"capture disabled: {capture.error}")
+
         for _ in range(20):
             if PLAYER_MAC in cli.raw("players 0 100").replace("%3A", ":"):
                 break
@@ -824,22 +875,26 @@ def main():
         run.transition_device_phases(lms, prefs)
         player = run.player
     except KeyboardInterrupt:
+        if run is None: raise
         run.check("run", "interrupted", False, "stopped early")
     except Exception as e:
+        if run is None: raise
         run.check("run", "error", False, str(e))
     finally:
-        player = run.player
-        prefs.restore()
-        try:
-            cli.player("stop")
-        except OSError:
-            pass
-        time.sleep(1)
-        player.stop()
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP): signal.signal(sig, signal.SIG_IGN)
+        if run: player = run.player
+        if prefs: prefs.restore()
+        if player:
+            try:
+                cli.player("stop")
+            except OSError:
+                pass
+            time.sleep(1)
+            player.stop()
         if capture:
             capture.stop()
-        events.stop()
-        if not args.keep_player:
+        if events: events.stop()
+        if player and not args.keep_player:
             try:
                 cli.player("client forget")
             except OSError:
@@ -860,12 +915,8 @@ def main():
         f.write(f"finished={time.strftime('%Y-%m-%d %H:%M:%S')}\n")
     run.report.close()
     run.status_log.close()
-    tarball = f"{outdir}.tar.gz"
-    with tarfile.open(tarball, "w:gz") as tar:
-        tar.add(outdir, arcname=os.path.basename(outdir))
-    print(f"Tarball: {tarball}", flush=True)
-    sys.exit(0 if run.results and not failed else 1)
+    return 0 if run.results and not failed else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

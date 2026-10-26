@@ -3,8 +3,15 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Offline checks of the device script's two-phase capture/rate contract."""
 import importlib.util
+import contextlib
+import io
+import os
+import signal
+import sys
+import tarfile
 from pathlib import Path
 import tempfile
+tempfile.tempdir = os.environ.get('TMPDIR') or '/var/tmp'
 import struct
 import unittest
 from unittest.mock import Mock, patch
@@ -26,6 +33,46 @@ class DeviceScriptTests(unittest.TestCase):
 
     def result(self, track, check):
         return next(ok for label, name, ok, _ in self.run.results if (label, name) == (track, check))
+
+    def test_capture_startup_interruption_reaps_process(self):
+        proc=Mock();proc.poll.return_value=None
+        with patch.object(device.shutil,'which',return_value='/fake/tcpdump'), \
+             patch.object(device.subprocess,'run',return_value=Mock(stdout='dev lo')), \
+             patch.object(device.subprocess,'Popen',return_value=proc), \
+             patch.object(device.time,'sleep',side_effect=[KeyboardInterrupt,None]):
+            with self.assertRaises(KeyboardInterrupt):
+                device.Capture('127.0.0.1',str(Path(self.temp.name)/'capture.pcap'))
+        proc.send_signal.assert_called_once_with(signal.SIGINT)
+        proc.wait.assert_called_once_with(timeout=5)
+
+    def test_disk_capture_cleanup_and_retention(self):
+        root=Path(self.temp.name);scratch=root/'scratch';scratch.mkdir()
+        cache=root/'cache'
+        def fail(args,lms,cli,outdir):
+            (Path(outdir)/'comparison.wav').write_bytes(b'fixture PCM')
+            raise RuntimeError('setup failed')
+        with patch.dict(os.environ, TMPDIR=str(scratch), YENEY_TEST_CACHE=str(cache)), \
+             patch.object(sys,'argv',['core-device-test','--lms','127.0.0.1','--no-capture']), \
+             patch.object(device.os,'access',return_value=True), patch.object(device,'Cli'), \
+             patch.object(device,'run_device',side_effect=fail), contextlib.redirect_stdout(io.StringIO()):
+            for _ in range(6):
+                with self.assertRaisesRegex(RuntimeError,'setup failed'):device.main()
+                self.assertFalse(list(scratch.iterdir()))
+            archives=list((cache/'core-device').glob('core-test-*.tar.gz'))
+            self.assertEqual(len(archives),5)
+            with tarfile.open(archives[-1]) as tar:
+                self.assertTrue(any(name.endswith('/comparison.wav') for name in tar.getnames()))
+        def interrupt(args,lms,cli,outdir):
+            (Path(outdir)/'capture.log').write_text('interrupted')
+            os.kill(os.getpid(),signal.SIGTERM)
+        with patch.dict(os.environ, TMPDIR=str(scratch), YENEY_TEST_CACHE=str(cache)), \
+             patch.object(sys,'argv',['core-device-test','--lms','127.0.0.1','--no-capture']), \
+             patch.object(device.os,'access',return_value=True), patch.object(device,'Cli'), \
+             patch.object(device,'run_device',side_effect=interrupt), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(KeyboardInterrupt):device.main()
+            self.assertFalse(list(scratch.iterdir()))
+            self.assertEqual(len(list((cache/'core-device').glob('core-test-*.tar.gz'))),5)
+        print('PASS core diagnostic storage: disk scratch removed after setup failure and SIGTERM; only five capture archives retained')
 
     def test_native_rate_must_equal_songinfo(self):
         for rates, expected, ok in [(['192000'], 192000, True), (['48000'], 192000, False),
