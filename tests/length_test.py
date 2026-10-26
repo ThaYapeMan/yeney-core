@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""Independent synthetic M4A length fixtures; private media decoded only to /dev/null."""
+"""Synthetic length fixtures; optional owner media requires an explicit fixture path."""
 import math,os,re,struct,subprocess,tempfile,unittest
 from pathlib import Path
 from decoders_test import mp4, alac_parts
@@ -100,10 +100,13 @@ class Lengths(unittest.TestCase):
             self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(out.read_bytes(),raw(values[117:10153]))
         print('PASS strict stream M4A edit precedence unchanged: ignored malformed gapless metadata cannot override an edit',flush=True)
     def test_private(self):
-        directory=Path('/mnt/c/HueSyncLXC/private-fixtures')
+        configured=os.environ.get('YENEY_LENGTH_FIXTURE_DIR')
+        if not configured:
+            print('SKIP owner-file length check: YENEY_LENGTH_FIXTURE_DIR unset; synthetic fixtures only',flush=True);return
+        directory=Path(configured)
         files=sorted(p for p in directory.glob('*') if p.suffix.lower() in ('.m4a','.flac')) if directory.is_dir() else []
         if not files:
-            print('SKIP owner-file length check: private-fixtures folder absent or contains no M4A/FLAC files',flush=True);return
+            self.fail('YENEY_LENGTH_FIXTURE_DIR contains no M4A/FLAC files')
         for path in files:
             for converted in (False,True):
                 if path.suffix.lower()=='.m4a':result=decode(path,Path('/dev/null'),converted)
