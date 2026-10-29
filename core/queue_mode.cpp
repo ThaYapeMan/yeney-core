@@ -56,6 +56,11 @@ void QueueMode::reportDecoded(Track &t) {
         if (!(lookahead ? sink.queuePrefixProduced(t.descriptor.occurrence, t.produced)
                         : sink.queueItemProduced(t.descriptor.occurrence)))
             return;
+        if (sink.queueEndRequiresPlayed(t.descriptor.occurrence)) {
+            const auto total = sink.committedItemFrames(t.descriptor.occurrence).value_or(t.produced);
+            if (sink.audibleFrames() < t.first + total)
+                return;
+        }
         if (round <= t.startRound)
             return; // put STMs on the wire one event-loop round before STMd
         if (sink.speakerDriven() && cfg.queueRemoteSource && cfg.queueRemoteSource(t.descriptor.occurrence)) {
@@ -181,6 +186,8 @@ bool QueueMode::audibleEvents() {
         if (p.paused && !wasPaused)
             stat("STMp");
         else if (!p.playing && wasPlaying) {
+            if (sink.queueEndRequiresPlayed(state.occurrence))
+                reportDecoded(*p.audible);
             stat("STMu");
             p.ended = true;
         } else if (p.playing && !p.paused && (wasPaused || !wasPlaying)) {

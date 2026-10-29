@@ -4,18 +4,51 @@
 // Licensed under the PolyForm Noncommercial License 1.0.0. See LICENSE.
 // THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
 
+#include "core/encoded_input.h"
 #include "core/flac_header.h"
 #include "core/protocol.h"
 #include "core/ring.h"
 #include "core/sample_conversion.h"
 #include "core/transitions.h"
 #include <cassert>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <iostream>
 #include <random>
 using namespace yeney;
 int main() {
+    {
+        auto parent = std::getenv("TMPDIR");
+        std::string pattern = std::string(parent ? parent : "/var/tmp") + "/yeney-input-XXXXXX";
+        std::vector<char> directory(pattern.begin(), pattern.end());
+        directory.push_back(0);
+        assert(mkdtemp(directory.data()));
+        EncodedInput input(16);
+        input.spool(directory.data(), 32768);
+        std::deque<uint8_t> expected;
+        std::mt19937 random(214);
+        for (unsigned turn = 0; turn < 200; ++turn) {
+            std::array<uint8_t, 7000> bytes;
+            for (auto &b : bytes)
+                b = uint8_t(random());
+            auto n = input.push(bytes.data(), bytes.size());
+            expected.insert(expected.end(), bytes.begin(), bytes.begin() + n);
+            const auto take = std::min<size_t>(expected.size(), turn % 2 ? 5001 : 4137);
+            for (size_t i = 0; i < take; ++i)
+                assert(input.at(i) == expected[i]);
+            input.discard(take);
+            expected.erase(expected.begin(), expected.begin() + take);
+            assert(input.size() == expected.size() && input.size() + input.free() == 32768);
+        }
+        for (size_t i = 0; i < expected.size(); ++i)
+            assert(input.at(i) == expected[i]);
+        input.clear();
+        assert(input.capacity() == 16 && !input.size());
+        assert(rmdir(directory.data()) == 0); // unlinked backing file leaves no artifacts
+        std::cout << "PASS encoded input: disk FIFO exceeds RAM, wraps without loss, bounded capacity, pause "
+                     "retention, clear restores RAM and removes backing file\n";
+    }
     {
         const uint8_t fixed[] = {0xff, 0xf8, 0x79, 0x88, 4, 6, 0x4f, 0x6f};
         const uint8_t variable[] = {0xff, 0xf9, 0x79, 0x88, 0xe4, 0x80, 0x80, 6, 0x4f, 5};

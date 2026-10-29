@@ -7,9 +7,9 @@
 #include "player.h"
 #include "decimating_decoder.h"
 #include "decoder.h"
+#include "encoded_input.h"
 #include "play_clock.h"
 #include "playback_state.h"
-#include "ring.h"
 #include "transitions.h"
 #include <algorithm>
 #include <arpa/inet.h>
@@ -111,7 +111,7 @@ struct Player::Impl {
     std::shared_ptr<Resolution> resolution;
     ServerParser parser;
     Bytes outbound, request;
-    Ring<uint8_t> input;
+    EncodedInput input;
     Overlap overlap;
     size_t reservedWindow = 0;
     size_t outputCapacity() const {
@@ -196,6 +196,7 @@ struct Player::Impl {
         http.reset();
         httpConnecting = false;
         input.clear();
+        sink.encodedSpool(0);
         request.clear();
     }
     void clear(bool stop) {
@@ -592,6 +593,11 @@ struct Player::Impl {
         if (!acknowledged)
             stat("STMc");
         try {
+            if (auto spool = sink.encodedSpool(t.descriptor.occurrence)) {
+                input.spool(spool->directory, spool->bytes, spool->allocate);
+                log("queue encoded spool capacity_bytes=" + std::to_string(spool->bytes));
+            }
+            t.threshold = std::min(size_t(b[11]) * 1024, input.capacity());
             if (t.transition > 4)
                 throw std::invalid_argument("unsupported transition type");
             log("track gain=" + std::to_string(t.replayGain) + " transition=" + std::to_string(t.transition) +
@@ -669,8 +675,11 @@ struct Player::Impl {
             return;
         uint8_t b[8192];
         size_t room = haveHeaders ? input.free() : std::min(input.capacity(), sizeof(b));
-        if (!room)
+        if (!room) {
+            if (input.diskBacked() && paused)
+                failStream("encoded spool quota exhausted while paused");
             return;
+        }
         ssize_t n = ::recv(http.fd, b, std::min(room, sizeof(b)), 0);
         if (n == 0) {
             if (!haveHeaders ||
@@ -730,8 +739,14 @@ struct Player::Impl {
             failStream("HTTP body exceeded input capacity");
             return;
         }
-        if (!cachedRun)
-            input.push(b + offset, amount);
+        if (!cachedRun) {
+            try {
+                input.push(b + offset, amount);
+            } catch (const std::exception &e) {
+                failStream(e.what());
+                return;
+            }
+        }
         received += amount;
         bodyReceived += amount;
         if (bodyReceived == contentLength)

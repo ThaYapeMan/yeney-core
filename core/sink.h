@@ -7,10 +7,16 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 
 namespace yeney {
+struct EncodedSpool {
+    std::string directory;
+    uint64_t bytes = 0;
+    std::function<void(uint64_t)> allocate; // shared host quota, actual file high-water bytes
+};
 struct Format {
     uint32_t rate = 48000;
     unsigned bits = 16, channels = 2;
@@ -62,6 +68,10 @@ public:
     // Optional serialized remote-control owner. Return true only when the host
     // consumes this command. No status acknowledgement is fabricated by core;
     // speaker evidence remains authoritative. s may be consumed for cache reuse.
+    // Reserve/release host-owned disk capacity for finite encoded source input.
+    // occurrence=0 releases the previous reservation after its FIFO is closed.
+    virtual std::optional<EncodedSpool> encodedSpool(uint64_t) { return std::nullopt; }
+    virtual bool queueEndRequiresPlayed(uint64_t) const { return false; }
     virtual bool queueItemProduced(uint64_t) const { return true; }
     virtual bool takeQueueFailure() { return false; }
     virtual bool queueCommand(char, uint32_t) { return false; }
