@@ -74,8 +74,14 @@ int main(int argc, char **argv) {
                 for (uint32_t v : {uint32_t(data[i].left), uint32_t(data[i].right)})
                     for (unsigned j = 0; j < 4; ++j)
                         out.put(v >> (j * 8));
-            if (decoder->done())
+            if (decoder->done()) {
+                // Completion can publish an error after the earlier poll and
+                // the final take(). Recheck after observing terminal state.
+                error = decoder->error();
+                if (!error.empty())
+                    throw std::runtime_error(error);
                 break;
+            }
             if (!n)
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
         }
