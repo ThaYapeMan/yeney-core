@@ -209,6 +209,10 @@ public:
         changed.notify_all();
         return count;
     }
+    bool sourceStart(uint64_t &value) const override {
+        std::lock_guard<std::mutex> lock(mutex);
+        return haveFormat && !converted && raw->sourceStart(value);
+    }
     bool format(Format &f) const override {
         std::lock_guard<std::mutex> lock(mutex);
         f = convertedFormat;

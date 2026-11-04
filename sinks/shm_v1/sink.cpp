@@ -167,6 +167,8 @@ void ShmV1Sink::publish(const Frame *frames, size_t count) {
         put64(t.anchor_abs_frame, first);
         put64(t.anchor_play_mono_ns, playNs_);
         put(t.rate_milli_hz, timingRate_);
+        put64(t.content_frame, contentFrame_);
+        put(t.content_flags, uint32_t(contentKnown_ ? 1 : 0));
     }
     put(t.event_seq, eventSeq_);
     put(t.event_flags, eventFlags_);

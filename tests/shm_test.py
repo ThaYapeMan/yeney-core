@@ -153,6 +153,7 @@ class ShmTests(unittest.TestCase):
             generation = snapshot(path)[2][4]
             seen = set()
             production_seen = set()
+            content_seen = 0
             invalidations = 0
             s.lms.strm('s', s.source(tracks[0][0]), bits=24)
             next_track = 1
@@ -170,6 +171,13 @@ class ShmTests(unittest.TestCase):
                     previous = pos
                     seen.add(h[3])
                 if consumer:
+                    ext_read = source._read_ext_coherent()
+                    if ext_read and ext_read.timing and ext_read.abs_write_pos:
+                        content_seen += 1
+                        clock = ext_read.timing
+                        self.assertEqual(clock.content_flags, 1)
+                        track_start = max([0] + [b for b in boundaries if b <= clock.anchor_abs_frame])
+                        self.assertEqual(clock.content_frame, clock.anchor_abs_frame - track_start)
                     result = source.read()
                     if isinstance(result, consumer.DataResult):
                         f = result.frame
@@ -193,6 +201,7 @@ class ShmTests(unittest.TestCase):
             self.assertEqual(seen, {44100, 48000})
             self.assertEqual(next_track, 3)
             if consumer:
+                self.assertGreater(content_seen, 0)
                 self.assertEqual(production_seen, {44100, 48000, 'gapless'})
                 self.assertGreaterEqual(invalidations, 2) # running start and rate change
                 source.close()

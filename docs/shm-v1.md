@@ -172,7 +172,8 @@ sink without supplying timing and its prefix reader remains unchanged.
 | 32 | event_flags | uint32 |
 | 36 | event_abs_frame | uint64, exclusive export position at event |
 | 44 | event_value | int64 |
-| 52 | reserved | twelve zero bytes |
+| 52 | content_frame | uint64 first content sample of the anchored block |
+| 60 | content_flags | uint32; bit 0 means position known; other bits zero |
 
 For exported frame F, play time is anchor_play_mono_ns +
 (F - anchor_abs_frame) * 1e12 / rate_milli_hz. The anchor refers to the first
@@ -207,3 +208,18 @@ end emits DISCONTINUITY at the next export boundary. Explicit pause/track events
 already identify their boundary and suppress this duplicate marker for their
 first subsequent block. This changes no playback; it prevents a reader from
 extrapolating one anchor across two different pacing intervals.
+
+The final twelve formerly reserved bytes carry an optional content coordinate.
+The PCM prefix, all earlier tail fields and both version numbers are unchanged.
+Old producers leave content_flags zero, which means unknown. Consumers must ignore
+content_frame unless bit 0 is set. Both fields share the existing publication lock
+and sequence with the block anchor; lifecycle-only publications retain that anchor.
+
+The player adds its accepted track frame count to the decoder's first source
+sample. PCM starts at zero in the supplied PCM stream, FLAC uses libFLAC's first
+sample number (including the actual block-aligned seek landing), and ALAC starts
+at the validated MP4 trim begin. No requested seek timestamp enters this coordinate.
+MP3 and rate-converted output currently report unknown. A decoder without a known
+source coordinate also reports unknown. During every crossfade overlap block,
+bit 0 is clear, including the endpoints; normal validity resumes after the overlap.
+Other processing, such as gain, does not change the sample coordinate.

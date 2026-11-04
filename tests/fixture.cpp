@@ -79,6 +79,9 @@ public:
         events_ << "boundary " << frame << ' ' << f.rate << ' ' << f.bits << ' ' << f.channels << ' '
                 << gapless << std::endl;
     }
+    void contentPosition(uint64_t frame, bool known) override {
+        events_ << "content " << frames_ << ' ' << frame << ' ' << known << std::endl;
+    }
     size_t write(const yeney::Frame *p, size_t n, bool processed) override {
         if (processed_ != int(processed)) {
             events_ << "processed " << processed << std::endl;

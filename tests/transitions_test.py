@@ -132,6 +132,13 @@ class TransitionTests(unittest.TestCase):
                     expected.append(tuple(max(-2147483648, min(2147483647, x + y)) for x, y in zip(fa, fb)))
                 expected += [gain_frame(f, 131072) for f in b[window:]]
             self.assertEqual(actual, pack(expected))
+            positions = [tuple(map(int, line.split()[1:])) for line in s.events() if line.startswith('content ')]
+            self.assertTrue(positions)
+            for absolute, content, known in positions:
+                mixed = next_rate == RATE and boundary <= absolute < len(a)
+                self.assertEqual(known, int(not mixed))
+                if not mixed:
+                    self.assertEqual(content, absolute if absolute < boundary else absolute - boundary)
             self.assertTrue(any(line.startswith(f'boundary {boundary} {next_rate} ') for line in s.events()))
             starts = [p for p in s.lms.packets if p.get('event') == 'STMs']
             self.assertEqual(len(starts), 2)

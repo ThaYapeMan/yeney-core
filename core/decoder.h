@@ -34,6 +34,7 @@ class Decoder {
 public:
     static constexpr size_t inputCapacity = 65536, outputCapacity = 8192;
     virtual ~Decoder() = default;
+    virtual bool sourceStart(uint64_t &) const { return false; }
     virtual size_t feed(const uint8_t *, size_t) = 0;
     virtual void finish() = 0;
     virtual size_t take(Frame *, size_t) = 0;

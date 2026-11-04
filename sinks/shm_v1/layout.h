@@ -48,7 +48,8 @@ static_assert(sizeof(Layout) == 32888);
 struct TimingBlock {
     uint8_t magic[4], version[2], reserved0[2];
     uint8_t anchor_abs_frame[8], anchor_play_mono_ns[8], rate_milli_hz[4];
-    uint8_t event_seq[4], event_flags[4], event_abs_frame[8], event_value[8], reserved[12];
+    uint8_t event_seq[4], event_flags[4], event_abs_frame[8], event_value[8], content_frame[8],
+        content_flags[4];
 };
 struct TimedLayout {
     Layout legacy;
@@ -66,7 +67,8 @@ static_assert(offsetof(TimingBlock, event_seq) == 28);
 static_assert(offsetof(TimingBlock, event_flags) == 32);
 static_assert(offsetof(TimingBlock, event_abs_frame) == 36);
 static_assert(offsetof(TimingBlock, event_value) == 44);
-static_assert(offsetof(TimingBlock, reserved) == 52);
+static_assert(offsetof(TimingBlock, content_frame) == 52);
+static_assert(offsetof(TimingBlock, content_flags) == 60);
 constexpr uint32_t timingMagic = 0x54504e59; // YNPT
 constexpr uint32_t FLUSH = 1, PAUSE = 2, RESUME = 4, DISCONTINUITY = 8, SYNC_PAUSE = 64, SYNC_SKIP = 128;
 constexpr uint32_t magic = 0x48555345;

@@ -106,6 +106,8 @@ public:
         return write(pcm, frames);
     }
     // Optional paced-play schedule; firstFrame is the cumulative sink coordinate.
+    // First source sample of the next write; false for unknown or mixed content.
+    virtual void contentPosition(uint64_t, bool) {}
     virtual void playTiming(uint64_t, uint64_t, uint32_t) {}
     virtual void syncPause(uint64_t) { pause(); }
     virtual void syncSkip(uint64_t) {}

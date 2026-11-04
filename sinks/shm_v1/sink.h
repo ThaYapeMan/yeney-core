@@ -18,6 +18,8 @@ class ShmV1Sink : public Sink {
     bool clockEvent_ = true;
     uint32_t timingRate_ = 0, eventSeq_ = 0, eventFlags_ = 0;
     int64_t eventValue_ = 0;
+    uint64_t contentFrame_ = 0;
+    bool contentKnown_ = false;
     void event(uint32_t flags, int64_t value = 0);
     void publish(const Frame *, size_t);
 
@@ -29,6 +31,10 @@ public:
     uint32_t maxSampleRate() const override { return maximum_; }
     void trackBoundary(uint64_t, const Format &, bool) override;
     size_t write(const Frame *, size_t) override;
+    void contentPosition(uint64_t frame, bool known) override {
+        contentFrame_ = frame;
+        contentKnown_ = known;
+    }
     void playTiming(uint64_t, uint64_t, uint32_t) override;
     void syncPause(uint64_t) override;
     void syncSkip(uint64_t) override;

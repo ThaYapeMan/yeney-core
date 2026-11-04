@@ -36,6 +36,8 @@ class Worker : public Decoder {
     std::thread thread_;
     bool eof_ = false, cancel_ = false, done_ = false, haveFormat_ = false;
     Format format_;
+    uint64_t sourceStart_ = 0;
+    bool sourceKnown_ = false;
     std::optional<uint64_t> exactFrames_;
     std::string error_;
     detail::QueueSourceLength sourceLength_;
@@ -111,6 +113,11 @@ protected:
         }
         return true;
     }
+    void setSourceStart(uint64_t value) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        sourceStart_ = value;
+        sourceKnown_ = true;
+    }
     void setFormat(Format f) {
         if (!f.rate || f.rate > cfg.maxRate || f.channels < 1 || f.channels > 2)
             throw std::runtime_error("unsupported rate or more than 2 channels");
@@ -155,6 +162,11 @@ public:
         auto count = frames_.pop(p, n);
         cv_.notify_all();
         return count;
+    }
+    bool sourceStart(uint64_t &value) const override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        value = sourceStart_;
+        return sourceKnown_;
     }
     bool format(Format &f) const override {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -227,6 +239,7 @@ class PcmWorker : public Worker {
             else
                 input.push(bytes, n);
         }
+        setSourceStart(0); // PCM stream coordinate; no timestamp-derived seek offset.
         setFormat(t.format);
         unsigned width = t.format.bits / 8 * t.format.channels;
         Bytes pending;
@@ -416,6 +429,8 @@ class FlacWorker : public Worker {
                 const bool sampleNumber = f->header.number_type == FLAC__FRAME_NUMBER_TYPE_SAMPLE_NUMBER;
                 const auto number =
                     sampleNumber ? f->header.number.sample_number : f->header.number.frame_number;
+                if (sampleNumber)
+                    w.setSourceStart(number); // Actual FLAC landing, never requested seek time.
                 w.source.resolve(w.cfg, sampleNumber, number,
                                  [&w](uint64_t frames) { w.setExactFrames(frames); });
             }
@@ -604,6 +619,7 @@ class AlacWorker : public Worker {
                 info = h;
                 if (info.format.channels > 2)
                     throw std::runtime_error("ALAC: more than 2 channels unsupported");
+                setSourceStart(info.trimBegin);
                 setFormat(info.format);
                 packetFrames(info.framesPerPacket);
                 setExactFrames(info.trimEnd - info.trimBegin);
