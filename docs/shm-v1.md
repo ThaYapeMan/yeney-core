@@ -6,7 +6,7 @@ The core pacer supplies real-time timing, including with `-o hw:CARD=Dummy,DEV=0
 
 ## Wire layout
 
-The POSIX name is `/squeezelite-<mac>`, backed by `/dev/shm/squeezelite-<mac>`.
+The POSIX name is `/yeney-<mac>`, backed by `/dev/shm/yeney-<mac>`.
 MAC bytes render as lowercase two-digit hex separated by colons. The mapping is
 32952 bytes; the original 32888-byte prefix is unchanged, little endian. `sinks/shm_v1/layout.h` statically asserts
 every field offset, total size, little endian and the 56-byte pthread lock ABI.
@@ -101,14 +101,15 @@ exit. This is the nonblocking shutdown tradeoff.
 on the command line. `-o <device>` is accepted, ignored, and reports one info line
 to stderr. The app is otherwise quiet by default; errors remain on stderr and
 `-d 1` enables event logging. Name, MAC, discovery/server selection and --max-rate
-remain available. Select/install yeney-player in place of squeezelite externally;
-this round makes no changes to LampaStream or YeneY.
+remain available. Select/install yeney-player externally; consumers must open
+the new segment name. This repository does not change LampaStream or YeneY.
 
 Tests cover layout, sequence wrap, entropy syscall fallback/failure, generation
 and inode reuse, multiple laps, rounded samples, rates, lifecycle and lock gaps.
 An independent Python reader validates fake-LMS PCM across gapless and rate changes.
-The unmodified LampaStream SqueezeliteShmStereoSource(require_v1=True) receives the
-same data, including exact sample-position checks and the expected rate invalidation.
+The LampaStream production consumer test checks the same data, including exact
+sample-position checks and the expected rate invalidation. Until its reader
+switches to the new segment name, this cross-repository check is expected to fail.
 A missing checkout or failed consumer import fails the test. Set
 `LAMPASTREAM_CHECKOUT` to the real checkout; the bridge's `make test` defaults
 it to `../LampaStream` relative to the bridge root. There is no alias fallback.

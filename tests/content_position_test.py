@@ -5,9 +5,10 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from shm_name import SEGMENT_PREFIX
 ROOT = Path(__file__).resolve().parents[1]
 def check(codec, path, start, known=True):
-    subprocess.run([str(ROOT/'content-position-test'), codec, str(path), str(start), str(int(known))], check=True)
+    subprocess.run([str(ROOT/'content-position-test'), codec, str(path), str(start), str(int(known)), SEGMENT_PREFIX], check=True)
 with tempfile.TemporaryDirectory(dir=os.environ.get('TMPDIR', '/var/tmp')) as directory:
     work = Path(directory)
     pcm = work/'pcm.raw'

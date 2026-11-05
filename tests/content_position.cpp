@@ -17,7 +17,7 @@ template <class T> T get(const uint8_t *p) {
     return value;
 }
 int main(int argc, char **argv) {
-    assert(argc == 5);
+    assert(argc == 6);
     DecoderConfig config;
     config.codec = argv[1][0];
     auto decoder = makeDecoder(config);
@@ -28,6 +28,8 @@ int main(int argc, char **argv) {
     assert(file && !bytes.empty());
     std::array<uint8_t, 6> mac{2, 0x7c, 0, uint8_t(getpid() >> 8), uint8_t(getpid()), 1};
     auto name = ShmV1Sink::segmentName(mac);
+    assert(name.rfind(argv[5], 0) == 0);
+    assert(std::string(argv[5]) == ShmV1Sink::kSegmentPrefix);
     {
         ShmV1Sink sink(mac);
         auto controlMac = mac;

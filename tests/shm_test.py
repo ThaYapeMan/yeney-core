@@ -15,6 +15,7 @@ import unittest
 # Import the real read-only checkout without creating bytecode in it.
 sys.dont_write_bytecode = True
 from fake_lms import Session, pcm
+from shm_name import segment_path
 
 ROOT = Path(__file__).resolve().parents[1]
 HEADER = struct.Struct('<IIB3xIq')
@@ -58,9 +59,26 @@ class ShmTests(unittest.TestCase):
     def session(self, **kw):
         ShmTests.counter += 1
         mac = '02:3a:' + ':'.join(f'{v:02x}' for v in os.getpid().to_bytes(3, 'big')) + f':{self.counter:02x}'
-        path = Path('/dev/shm/squeeze' + 'lite-' + mac)
+        path = segment_path(mac)
         self.addCleanup(lambda: path.unlink(missing_ok=True))
         return Session(app=True, sink='shm', mac=mac, **kw), path, mac
+
+    def test_segment_name_creation(self):
+        before = set(Path('/dev/shm').glob('squeezelite-*'))
+        s, path, mac = self.session()
+        legacy = Path('/dev/shm') / ('squeezelite-' + mac)
+        self.assertFalse(legacy.exists())
+        with s:
+            self.assertTrue(path.is_file(), 'yeney-<mac> must be created')
+            body, _ = pcm(seconds=.1)
+            s.lms.strm('s', s.source(body))
+            s.lms.wait('STMu')
+            self.assertFalse(legacy.exists())
+            self.assertFalse(set(Path('/dev/shm').glob('squeezelite-*')) - before)
+        self.assertTrue(path.is_file())
+        self.assertFalse(legacy.exists())
+        self.assertFalse(set(Path('/dev/shm').glob('squeezelite-*')) - before)
+        print('PASS yeney-<mac> created; no squeezelite-* file created during producer run', flush=True)
 
     def test_player_timing_sync_commands(self):
         s, path, _ = self.session()

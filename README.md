@@ -24,7 +24,7 @@ For LampaStream, use the same player arguments with our paced SHM output:
 # --sink shm is equivalent to -v; no ALSA device is opened.
 ```
 
-The SHM v1 segment is `/dev/shm/squeezelite-<lowercase-mac>` and is left in place
+The SHM v1 segment is `/dev/shm/yeney-<lowercase-mac>` and is left in place
 on exit for LampaStream's lifecycle/orphan cleanup. Install/select yeney-player
 as the executable in place of squeezelite externally; this repo does not alter
 LampaStream. See [SHM v1 layout, lifecycle and compatibility](docs/shm-v1.md).

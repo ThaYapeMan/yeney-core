@@ -24,6 +24,7 @@ class ShmV1Sink : public Sink {
     void publish(const Frame *, size_t);
 
 public:
+    static constexpr char kSegmentPrefix[] = "/yeney-";
     static uint64_t secureGeneration();
     static std::string segmentName(const std::array<uint8_t, 6> &);
     ShmV1Sink(const std::array<uint8_t, 6> &, uint32_t maximum = 48000);
