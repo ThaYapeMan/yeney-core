@@ -72,3 +72,28 @@ Required Notice: Copyright (c) 2026 Jaap van Vliet.
 Third-party libraries retain their own licences; full texts and pins are in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Include these notices when
 distributing binaries.
+
+Content positions use the original decoded source sample coordinates. For LMS
+ALAC/M4A seeks, the selected `mdhd` duration stays original while `stts` covers
+only delivered packets: their exact duration difference gives the first packet's
+source frame. A known origin requires a finite media duration, complete consistent
+packet tables, exact media-to-sample conversion and a whole ALAC-packet difference
+(with ordinary packet durations and at most one short final packet). Original
+edit-list/iTunSMPB ranges are intersected with the delivered range, so priming is
+not applied twice. Chunk offsets are rebased by LMS and are not source indices.
+Zero is known only when these tables prove that the response starts at the first
+packet; unprovable origins remain unknown. From-start trimming keeps its existing
+source coordinates. FLAC positions and the SHM v1/YNPT layouts are unchanged.
+
+Sample-rate-converted content remains unknown in output coordinates: a fresh
+filter at a nonzero landing lacks the from-start production's preceding samples.
+Native AAC is not advertised or decoded by this core; incoming AAC/M4A is rejected
+without publishing a known position. This does not add AAC playback support.
+
+`make test` includes real LMS 9.1.1 loopback MP4 seek tests when its cached
+distribution is present (`YENEY_REAL_LMS_HOME` overrides the default
+`~/.cache/yeney-test/real-lms-9.1.1`). Tests use ports 3483, 9000 and 19090 on
+loopback. FFmpeg generates public ALAC/AAC inputs and serves only as a PCM oracle.
+Set `YENEY_LENGTH_FIXTURE_DIR` for the optional private ALAC checks, read in place;
+unset it to see an explicit SKIP. Set `LAMPASTREAM_CHECKOUT` to the read-only
+consumer checkout to run its SHM `require_v1` gate.

@@ -619,7 +619,8 @@ class AlacWorker : public Worker {
                 info = h;
                 if (info.format.channels > 2)
                     throw std::runtime_error("ALAC: more than 2 channels unsupported");
-                setSourceStart(info.trimBegin);
+                if (info.sourceStartKnown)
+                    setSourceStart(info.sourceStart);
                 setFormat(info.format);
                 packetFrames(info.framesPerPacket);
                 setExactFrames(info.trimEnd - info.trimBegin);

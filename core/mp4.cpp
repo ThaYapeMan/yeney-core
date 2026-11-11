@@ -88,6 +88,9 @@ uint32_t count(View v, size_t width, size_t prefix = 8) {
 struct Track {
     bool audio = false;
     uint32_t timescale = 0, description = 0;
+    uint64_t duration = 0;
+    bool haveDuration = false, haveMdhd = false;
+    std::vector<std::pair<uint32_t, uint32_t>> timing;
     Bytes cookie;
     std::vector<uint32_t> sizes;
     std::vector<uint64_t> chunks;
@@ -132,7 +135,12 @@ void trackBoxes(View v, Track &t, size_t depth = 0) {
             if (d.p[0] > 1)
                 bad("mdhd version");
             d.need(0, d.p[0] ? 36 : 24);
+            if (t.haveMdhd)
+                bad("duplicate mdhd");
+            t.haveMdhd = true;
             t.timescale = d.u32(d.p[0] ? 20 : 12);
+            t.duration = d.p[0] ? d.u64(24) : d.u32(16);
+            t.haveDuration = t.duration != (d.p[0] ? UINT64_MAX : UINT32_MAX);
         } else if (b.type == "stsd") {
             unique(t.haveStsd);
             d.need(0, 8);
@@ -188,6 +196,7 @@ void trackBoxes(View v, Track &t, size_t depth = 0) {
                 uint32_t samples = d.u32(at), delta = d.u32(at + 4);
                 if (!samples || !delta)
                     bad("invalid stts entry");
+                t.timing.push_back({samples, delta});
                 t.ticks = add(t.ticks, mul(samples, delta));
                 t.timedPackets = add(t.timedPackets, samples);
             }
@@ -311,6 +320,31 @@ struct Mp4Demuxer::Impl {
         info.totalFrames = mul(t.ticks, info.format.rate) / t.timescale;
         if (partialMedia)
             info.totalFrames = std::min(info.totalFrames, mul(info.packetCount, info.framesPerPacket));
+        const auto remainingFrames = info.totalFrames;
+        uint64_t landed = 0;
+        // LMS preserves the selected media duration while shortening the packet
+        // tables. Only an exact, whole-packet difference establishes an origin.
+        // Chunk offsets are response-relative and cannot establish this origin.
+        bool packetTiming = true;
+        for (size_t i = 0; i < t.timing.size(); ++i) {
+            const auto [count, ticks] = t.timing[i];
+            const auto frames = mul(ticks, info.format.rate);
+            const auto full = mul(info.framesPerPacket, t.timescale);
+            if (frames != full && (i + 1 != t.timing.size() || count != 1 || frames > full))
+                packetTiming = false;
+        }
+        if (t.haveDuration && t.duration >= t.ticks && t.duration <= UINT64_MAX / info.format.rate &&
+            (t.duration == t.ticks || packetTiming)) {
+            const auto difference = mul(t.duration - t.ticks, info.format.rate);
+            const auto duration = mul(t.duration, info.format.rate);
+            if (difference % t.timescale == 0 && duration % t.timescale == 0 &&
+                difference / t.timescale % info.framesPerPacket == 0 &&
+                remainingFrames == mul(t.ticks, info.format.rate) / t.timescale) {
+                landed = difference / t.timescale;
+                info.sourceStartKnown = true;
+                info.totalFrames = duration / t.timescale;
+            }
+        }
         info.trimEnd = info.totalFrames;
         size_t sample = 0, run = 0;
         uint64_t previousEnd = 0;
@@ -356,7 +390,7 @@ struct Mp4Demuxer::Impl {
             if (!text)
                 bad("invalid iTunSMPB");
             text >> original; // Older writers may omit the original count.
-            const auto capacity = mul(info.packetCount, info.framesPerPacket);
+            const auto capacity = add(landed, mul(info.packetCount, info.framesPerPacket));
             const bool originalFits = partialMedia && original && delay <= info.totalFrames &&
                                       original <= info.totalFrames - delay &&
                                       padding <= capacity - std::min(capacity, add(delay, original));
@@ -382,6 +416,17 @@ struct Mp4Demuxer::Impl {
                     info.trimEnd = std::max(info.trimBegin, std::min(info.trimEnd, originalEnd));
                 }
             }
+        }
+        // Edits and gapless tags retain original-file coordinates in an LMS
+        // response. Intersect them with delivered media before decoding locally.
+        if (info.sourceStartKnown) {
+            auto local = [&](uint64_t frame) {
+                return std::min(remainingFrames, frame > landed ? frame - landed : uint64_t(0));
+            };
+            info.trimBegin = local(info.trimBegin);
+            info.trimEnd = std::max(info.trimBegin, local(info.trimEnd));
+            info.totalFrames = remainingFrames;
+            info.sourceStart = add(landed, info.trimBegin);
         }
         selected = true;
         onHeader(info);

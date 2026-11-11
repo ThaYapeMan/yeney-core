@@ -15,6 +15,8 @@ struct Mp4Info {
     uint32_t framesPerPacket = 0;
     uint64_t packetCount = 0;
     uint64_t totalFrames = 0, trimBegin = 0, trimEnd = 0;
+    uint64_t sourceStart = 0;
+    bool sourceStartKnown = false;
 };
 // Own incremental box/table parser. Packet callbacks run synchronously and may
 // apply backpressure. No seeking, and no ownership of the decoder or network.
