@@ -810,6 +810,7 @@ struct Player::Impl {
             }
             queue.describe(t);
             t.contentKnown = t.decoder->sourceStart(t.contentStart);
+            t.contentWarmup = t.decoder->warmupFrames();
             Frame frames[1024];
             size_t room = outputCapacity() - queued;
             room = queue.decodeRoom(t, room);
@@ -1013,7 +1014,8 @@ struct Player::Impl {
                 const uint64_t ns = uint64_t(stamp.tv_sec) * 1000000000 + stamp.tv_nsec;
                 sink.playTiming(submitted, scheduledPlayNs(now, ns, credit), t->format.rate * 1000);
             }
-            sink.contentPosition(t->contentStart + t->played, t->contentKnown && !overlap.old);
+            sink.contentPosition(t->contentStart + t->played, t->contentKnown && !overlap.old,
+                                 t->contentWarmup);
             size_t accepted = sink.write(frames, count, processed);
             if (accepted > count)
                 throw std::runtime_error("sink accepted more frames than offered");

@@ -226,6 +226,11 @@ class Positions(unittest.TestCase):
         cls.addClassCleanup(cls.server.close)
         cookie, packets = generated(cls.base/'library/public-44100.m4a', 44100, 16)
         generated(cls.base/'library/public-96000.m4a', 96000, 24)
+        for rate in (44100, 88200, 96000, 176400, 192000):
+            path = cls.base/f'library/matrix-{rate}.m4a'
+            generated(path, rate, 24)
+            subprocess.run(['ffmpeg', '-v', 'error', '-i', str(path), '-c:a', 'flac',
+                            '-sample_fmt', 's32', str(path.with_suffix('.flac'))], check=True)
         for edit in (True, False):
             (cls.base/f'library/trim-{edit}.m4a').write_bytes(trimmed(cookie, packets, edit=edit))
         subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'anoisesrc=r=44100:d=61:seed=7123:a=0.4',
@@ -304,12 +309,47 @@ class Positions(unittest.TestCase):
             known, start, count, failed, pcm = probe(body)
             self.assertEqual((known, failed, count), (0, 0, 4096))
         print('K7 missing/short/non-packet-aligned duration: unknown, decoded PCM retained', flush=True)
-    def test_K8_conversion_unknown(self):
+    def test_KC1_converted_matrix(self):
+        for rate in (44100, 88200, 96000, 176400, 192000):
+            target = 44100 if rate in (44100, 88200, 176400) else 48000
+            factor = rate // target
+            for codec, extension in ((b'l', 'm4a'), (b'f', 'flac')):
+                path = self.base/f'library/matrix-{rate}.{extension}'
+                wire, first, seek = self.server.capture(path, limit=64*1024*1024)
+                self.assertEqual(wire, codec)
+                source = probe(seek, "flac" if codec == b"f" else "native")
+                self.assertEqual(source[0], 1, (rate, extension, source[:4], len(seek), seek[:24]))
+                self.assertEqual(source[1] % factor, 0)
+                mode = 'convert-flac' if codec == b'f' else 'convert'
+                natural = probe(first, mode, full=True)
+                sought = probe(seek, mode, full=True)
+                self.assertEqual((natural[0], sought[0], natural[3], sought[3]), (1, 1, 0, 0))
+                self.assertEqual(sought[1], source[1] // factor)
+                result = subprocess.run([str(ROOT/'mp4-position-test'), mode], input=seek,
+                                        capture_output=True, check=True)
+                bound = int(result.stderr.decode().split('warmup=')[1].split()[0])
+                self.assertEqual(bound, 0 if factor == 1 else 160 if target == 44100 else 128)
+                aligned = natural[4][sought[1]*8:sought[1]*8+len(sought[4])]
+                self.assertEqual(len(aligned), len(sought[4]))
+                differences = [i for i in range(len(aligned)//8)
+                               if aligned[i*8:i*8+8] != sought[4][i*8:i*8+8]]
+                first_identical = max(differences, default=-1)+1
+                self.assertLessEqual(first_identical, bound)
+                print(f'KC1 {rate}->{target} {extension}: landed_source={source[1]} '
+                      f'landed_out={sought[1]} measured={first_identical} bound={bound}', flush=True)
+                # The content-position fixture checks converted known bits and v1 byte identity.
+                fixture = self.base/'matrix-seek.bin'
+                fixture.write_bytes(seek)
+                from shm_name import SEGMENT_PREFIX
+                subprocess.run([str(ROOT/'content-position-test'), 'c'+codec.decode(), str(fixture),
+                                str(sought[1]), '1', SEGMENT_PREFIX], check=True)
+    def test_K8_conversion_landing(self):
         codec, first, seek = self.server.capture(self.base/'library/public-96000.m4a', limit=32*1024*1024)
         landed, total, remaining, scale = origin(seek)
         natural = probe(first, 'convert', full=True)
         sought = probe(seek, 'convert', full=True)
-        self.assertEqual((natural[0], sought[0], natural[3], sought[3]), (0, 0, 0, 0))
+        self.assertEqual((natural[0], sought[0], natural[3], sought[3]), (1, 1, 0, 0))
+        self.assertEqual((natural[1], sought[1]), (0, landed//2))
         self.assertEqual((natural[2], sought[2]), ((total+1)//2, (remaining+1)//2))
         aligned = natural[4][landed//2*8:landed//2*8+len(sought[4])]
         self.assertEqual(len(aligned), len(sought[4]))
@@ -317,7 +357,7 @@ class Positions(unittest.TestCase):
         self.assertGreater(len(differences), 0)
         self.assertLess(max(differences), 128)
         print(f'K8 96000->48000: source_total={total} source_landing={landed} source_remaining={remaining} '
-              f'output_total={natural[2]} output_remaining={sought[2]} known=0/0 '
+              f'output_total={natural[2]} output_remaining={sought[2]} known=1/1 '
               f'warmup_different_frames={len(differences)} last_difference={max(differences)}', flush=True)
 
 if __name__ == '__main__':

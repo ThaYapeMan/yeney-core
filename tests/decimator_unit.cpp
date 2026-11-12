@@ -33,7 +33,45 @@ static Bytes wave(const std::vector<Frame> &frames, uint32_t rate) {
     }
     return bytes;
 }
+class LandingDecoder : public Decoder {
+    uint64_t landing;
+
+public:
+    explicit LandingDecoder(uint64_t value) : landing(value) {}
+    bool sourceStart(uint64_t &value) const override {
+        value = landing;
+        return true;
+    }
+    size_t feed(const uint8_t *, size_t) override { return 0; }
+    void finish() override {}
+    size_t take(Frame *, size_t) override { return 0; }
+    bool format(Format &value) const override {
+        value.rate = 192000;
+        return true;
+    }
+    bool done() const override { return false; }
+    std::string error() const override { return {}; }
+    size_t inputBuffered() const override { return 0; }
+    size_t outputBuffered() const override { return 0; }
+};
 int main() {
+    for (uint64_t landing : {4096u, 4097u}) {
+        DecoderConfig c;
+        c.convertToRate = 48000;
+        auto d = decimatingDecoder(std::make_unique<LandingDecoder>(landing), c);
+        Format f;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!d->format(f)) {
+            assert(std::chrono::steady_clock::now() < deadline);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        uint64_t out = 0;
+        assert(d->sourceStart(out) == (landing % 4 == 0));
+        if (landing % 4 == 0)
+            assert(out == landing / 4);
+        assert(d->warmupFrames() == 128);
+    }
+    std::cout << "PASS KC2 aligned landing known; nonmultiple landing unknown\n";
     for (auto rate : {88200u, 96000u, 176400u, 192000u}) {
         const auto target = Decimator::targetRate(rate), factor = rate / target;
         auto chain = std::make_shared<DecimationChain>();

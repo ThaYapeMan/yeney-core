@@ -85,8 +85,6 @@ Zero is known only when these tables prove that the response starts at the first
 packet; unprovable origins remain unknown. From-start trimming keeps its existing
 source coordinates. FLAC positions and the SHM v1/YNPT layouts are unchanged.
 
-Sample-rate-converted content remains unknown in output coordinates: a fresh
-filter at a nonzero landing lacks the from-start production's preceding samples.
 Native AAC is not advertised or decoded by this core; incoming AAC/M4A is rejected
 without publishing a known position. This does not add AAC playback support.
 
@@ -97,3 +95,13 @@ loopback. FFmpeg generates public ALAC/AAC inputs and serves only as a PCM oracl
 Set `YENEY_LENGTH_FIXTURE_DIR` for the optional private ALAC checks, read in place;
 unset it to see an explicit SKIP. Set `LAMPASTREAM_CHECKOUT` to the read-only
 consumer checkout to run its SHM `require_v1` gate.
+
+Converted content positions are output-frame coordinates. A known source landing
+must be divisible by the integer decimation factor; otherwise it remains unknown.
+A phase-shifted gapless output also stays unknown.
+The first output sample is exactly at `landed_source / factor`. Its first
+`warmupFrames()` samples may have filter-settling amplitudes: the bound is
+`ceil(((taps - 1) / 2) / factor)` (128 at 48 kHz, 160 at 44.1 kHz).
+The internal three-argument content-position callback carries this bound.
+YNPT retains its existing layout and known-bit semantics; the v1 prefix is unchanged.
+Consumers needing from-start-identical PCM must skip the settling frames.

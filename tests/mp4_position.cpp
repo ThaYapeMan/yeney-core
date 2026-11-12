@@ -11,13 +11,13 @@ int main(int argc, char **argv) {
     yeney::Bytes bytes((std::istreambuf_iterator<char>(std::cin)), {});
     yeney::DecoderConfig config;
     config.codec = argc > 1 && std::string(argv[1]) == "aac" ? 'a' : 'l';
-    if (argc > 1 && std::string(argv[1]) == "flac")
+    if (argc > 1 && (std::string(argv[1]) == "flac" || std::string(argv[1]) == "convert-flac"))
         config.codec = 'f';
     if (bytes.size() >= 4 && !std::memcmp(bytes.data(), "fLaC", 4))
         config.codec = 'f';
     config.maxRate = 192000;
     config.finitePcmContainers = true;
-    if (argc > 1 && std::string(argv[1]) == "convert")
+    if (argc > 1 && (std::string(argv[1]) == "convert" || std::string(argv[1]) == "convert-flac"))
         config.convertToRate = 48000;
     const bool full = argc > 2;
     auto decoder = yeney::makeDecoder(config);
@@ -42,6 +42,7 @@ int main(int argc, char **argv) {
     }
     uint64_t start = UINT64_MAX;
     const uint64_t known = decoder->sourceStart(start), failed = !decoder->error().empty();
+    std::cerr << "warmup=" << decoder->warmupFrames() << "\n";
     for (uint64_t v : {known, start, count, failed})
         for (unsigned j = 0; j < 8; ++j)
             std::cout.put(v >> (j * 8));

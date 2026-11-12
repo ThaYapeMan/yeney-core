@@ -27,6 +27,8 @@ class Converted : public Decoder {
     bool finished = false, haveFormat = false, converted = false;
     Format convertedFormat;
     std::optional<uint64_t> exact;
+    unsigned factor = 1, warmup = 0;
+    uint64_t outputPhase = 0;
     std::string failure;
     std::shared_ptr<DecimationTail> tail = std::make_shared<DecimationTail>(), previous;
     void emit(const Frame *p, size_t n) {
@@ -83,6 +85,9 @@ class Converted : public Decoder {
                 auto promised = raw->exactFrames();
                 if (promised)
                     exact = (*promised + (fir ? fir->factor() : 1) - 1) / (fir ? fir->factor() : 1);
+                outputPhase = phase;
+                factor = fir ? fir->factor() : 1;
+                warmup = fir ? (fir->delayFrames() + factor - 1) / factor : 0;
                 convertedFormat = source;
                 convertedFormat.rate = target;
                 if (converted)
@@ -211,7 +216,14 @@ public:
     }
     bool sourceStart(uint64_t &value) const override {
         std::lock_guard<std::mutex> lock(mutex);
-        return haveFormat && !converted && raw->sourceStart(value);
+        if (!haveFormat || outputPhase || !raw->sourceStart(value) || value % factor)
+            return false;
+        value /= factor;
+        return true;
+    }
+    uint64_t warmupFrames() const override {
+        std::lock_guard<std::mutex> lock(mutex);
+        return warmup;
     }
     bool format(Format &f) const override {
         std::lock_guard<std::mutex> lock(mutex);

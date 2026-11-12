@@ -17,7 +17,7 @@ struct PlaybackTrack : QueueTrackState {
     int autostart = 1;
     bool known = false, headerPcm = false, wave = false, ready = false, eof = false, decoded = false,
          boundary = false, gapless = false;
-    uint64_t contentStart = 0;
+    uint64_t contentStart = 0, contentWarmup = 0;
     bool contentKnown = false;
     uint64_t first = 0, end = UINT64_MAX, skipped = 0, played = 0, produced = 0;
     uint32_t replayGain = 0;

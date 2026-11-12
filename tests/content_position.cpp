@@ -20,6 +20,12 @@ int main(int argc, char **argv) {
     assert(argc == 6);
     DecoderConfig config;
     config.codec = argv[1][0];
+    if (config.codec == 'c') {
+        config.codec = argv[1][1];
+        config.convertToRate = 48000;
+        config.maxRate = 192000;
+        config.finitePcmContainers = true;
+    }
     auto decoder = makeDecoder(config);
     const uint64_t expected = std::stoull(argv[3]);
     const bool known = std::stoi(argv[4]);
