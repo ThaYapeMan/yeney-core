@@ -72,6 +72,7 @@ test: test-speaker format-check clock-unit shm-unit all unit-test test-player de
 	python3 tests/transitions_test.py
 	python3 tests/queue_test.py
 	python3 tests/speaker_test.py
+	python3 tests/status_request_test.py
 	python3 tests/queue_protocol_test.py
 
 clean:

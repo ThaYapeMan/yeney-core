@@ -61,5 +61,7 @@ public:
     // Network operations, discovery, and backoff never block shutdown.
     // Sink callbacks and the optional logger must also remain nonblocking.
     void run(const std::atomic_bool &stop);
+    // Thread-safe; coalesced to at most one extra STMt per 50 ms.
+    void requestStatus();
 };
 } // namespace yeney

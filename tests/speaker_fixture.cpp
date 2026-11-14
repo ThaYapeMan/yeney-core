@@ -4,6 +4,7 @@
 #include <csignal>
 #include <fstream>
 #include <iostream>
+#include <thread>
 #include <utility>
 static std::atomic_bool done{false};
 static void stop(int) { done = true; }
@@ -135,5 +136,16 @@ int main(int argc, char **argv) {
     Speaker sink(argv[2], argc == 4);
     std::signal(SIGTERM, stop);
     yeney::Player player(config, sink);
+    std::thread requests;
+    if (std::getenv("YENEY_TEST_STATUS_REQUEST"))
+        requests = std::thread([&] {
+            char c;
+            while (std::cin.get(c)) {
+                if (c == 'r')
+                    player.requestStatus();
+            }
+        });
     player.run(done);
+    if (requests.joinable())
+        requests.join();
 }

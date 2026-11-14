@@ -98,6 +98,8 @@ struct Player::Impl {
     using QueueMode = detail::QueueMode;
     using Track = detail::PlaybackTrack;
     using Overlap = detail::Overlap;
+    std::atomic_bool statusRequested{false};
+    uint32_t nextRequestedStat = 0;
     Config cfg;
     std::shared_ptr<DecimationChain> conversion = std::make_shared<DecimationChain>();
     Sink &sink;
@@ -1068,7 +1070,7 @@ struct Player::Impl {
     }
     void run(const std::atomic_bool &stop) {
         lastTick = lastStat = jiffies();
-        nextConnect = nextDiscovery = lastTick;
+        nextConnect = nextDiscovery = nextRequestedStat = lastTick;
         queue.beginRun();
         while (!stop.load()) {
             queue.pollGeneration();
@@ -1084,6 +1086,10 @@ struct Player::Impl {
                 httpStep(now);
                 decode();
                 outputStep(now);
+                if (due(now, nextRequestedStat) && statusRequested.exchange(false)) {
+                    stat("STMt");
+                    nextRequestedStat = now + 50;
+                }
             }
             pollfd p{control.fd, POLLIN, 0};
             ::poll(&p, control.fd >= 0 ? 1 : 0, 2);
@@ -1095,5 +1101,6 @@ struct Player::Impl {
 };
 Player::Player(Config c, Sink &s) : impl_(std::make_unique<Impl>(std::move(c), s)) {}
 Player::~Player() = default;
+void Player::requestStatus() { impl_->statusRequested.store(true); }
 void Player::run(const std::atomic_bool &stop) { impl_->run(stop); }
 } // namespace yeney
