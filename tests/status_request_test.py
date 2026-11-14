@@ -24,17 +24,21 @@ with tempfile.TemporaryDirectory(prefix='status-request-') as folder:
         lms.wait('STMs')
         lms.wait('STMd')
         # Synchronize to the periodic heartbeat, leaving a full second for requests.
-        lms.wait('STMt')
+        heartbeat = lms.wait('STMt')
         assert not select.select([lms.connection], [], [], .08)[0], 'unsolicited extra STAT'
         path.write_text('2 23456 r\n')
         time.sleep(.01)
         start = time.monotonic()
-        proc.stdin.write(b'r' * 1000)
+        proc.stdin.write(b'r')
         proc.stdin.flush()
         first = lms.wait('STMt')
         delay = first['time'] - start
         assert delay < .020, delay
         assert first['elapsed'] == 23456, first
+        assert not select.select([lms.connection], [], [], .08)[0], 'one request sent multiple STATs'
+        proc.stdin.write(b'r' * 1000)
+        proc.stdin.flush()
+        burst = lms.wait('STMt')
         # A burst may race the first exchange, but any follow-up is rate limited.
         extra = []
         while select.select([lms.connection], [], [], .08)[0]:
@@ -42,8 +46,10 @@ with tempfile.TemporaryDirectory(prefix='status-request-') as folder:
         assert len(extra) <= 1, extra
         if extra:
             assert extra[0]['event'] == 'STMt', extra
-            assert extra[0]['jiffies'] - first['jiffies'] >= 50, extra
+            assert extra[0]['jiffies'] - burst['jiffies'] >= 50, extra
         assert not select.select([lms.connection], [], [], .08)[0]
+        periodic = lms.wait('STMt')
+        assert 980 <= periodic['jiffies'] - heartbeat['jiffies'] <= 1020, (heartbeat, periodic)
         print(f'PASS B1 request STMt delay_ms={delay*1000:.3f} elapsed=23456; 1000 requests coalesce; no request no extra STAT')
     finally:
         proc.stdin.close()

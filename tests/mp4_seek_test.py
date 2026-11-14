@@ -119,6 +119,7 @@ class Loopback:
         self.process = self.stream = self.thread = None
         self.closed = False
         self.requests = queue.Queue()
+        self.send_lock = threading.Lock()
         self.errors = []
         for directory in ('prefs/plugin', 'library', 'cache', 'log', 'playlists'):
             (base/directory).mkdir(parents=True, exist_ok=True)
@@ -151,7 +152,8 @@ class Loopback:
         cli('pref prioritizeNative 1')
         print('WIRE loopback LMS version=9.1.1; synthetic capture player advertises AAC only for investigation', flush=True)
     def send(self, op, body):
-        self.stream.sendall(op.encode()+struct.pack('>I', len(body))+body)
+        with self.send_lock:
+            self.stream.sendall(op.encode()+struct.pack('>I', len(body))+body)
     def receive(self):
         pending = b''
         try:
@@ -167,6 +169,12 @@ class Loopback:
                     message, pending = pending[2:size+2], pending[size+2:]
                     if message[:5] == b'strms':
                         self.requests.put(message[4:])
+                    elif message[:5] == b'strmt':
+                        stamp = struct.unpack_from('>I', message, 22)[0]
+                        status = b'STMt' + bytes(3) + struct.pack('>IIIIHIIIIIHIIH',
+                            1048576, 0, 0, 0, 65535, int(time.monotonic()*1000) & 0xffffffff,
+                            8192, 4096, 0, 0, 0, 0, stamp, 0)
+                        self.send('STAT', status)
         except OSError as error:
             if not self.closed:
                 self.errors.append(str(error))
