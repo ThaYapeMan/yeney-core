@@ -18,6 +18,8 @@ struct Command {
 };
 struct Config {
     std::string name = "YeneY", server;
+    // Empty identity fields preserve the standard HELO capabilities.
+    std::string model, modelName, firmware;
     uint16_t port = 3483;
     std::string discoveryAddress = "255.255.255.255";
     std::array<uint8_t, 6> mac{0x02, 0, 0, 0, 0, 1};

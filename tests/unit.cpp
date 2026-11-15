@@ -130,6 +130,20 @@ int main() {
     assert(std::string(h.begin(), h.begin() + 4) == "HELO" && be32(h.data() + 4) == h.size() - 8);
     assert(h[8] == 12 && be16(h.data() + 32) == 0x4000 && be32(h.data() + 34) == 0x12345678 &&
            be32(h.data() + 38) == 0x9abcdef0);
+    const std::string defaultCaps =
+        "Model=yeney,ModelName=YeneY,AccuratePlayPoints=1,MaxSampleRate=48000,alc,flc,mp3,aif,pcm";
+    assert(std::string(h.begin() + 44, h.end()) == defaultCaps);
+    auto custom = hello({2, 1, 2, 3, 4, 5}, true, 0x123456789abcdef0ULL, 48000, "host", "Host Player",
+                        "0.9.0-abcdef0 (core 1234567)");
+    assert(std::equal(h.begin() + 8, h.begin() + 44, custom.begin() + 8));
+    assert(std::string(custom.begin() + 44, custom.end()) ==
+           "Model=host,ModelName=Host "
+           "Player,AccuratePlayPoints=1,MaxSampleRate=48000,alc,flc,mp3,aif,pcm,Firmware=0.9.0-abcdef0 (core "
+           "1234567)");
+    auto firmwareOnly = hello({2, 1, 2, 3, 4, 5}, true, 0x123456789abcdef0ULL, 48000, {}, {}, "firmware");
+    assert(std::string(firmwareOnly.begin() + 44, firmwareOnly.end()) == defaultCaps + ",Firmware=firmware");
+    std::cout << "PASS HELO: default bytes unchanged; host Model, ModelName and Firmware; firmware-only "
+                 "retains yeney/YeneY\n";
     Status s;
     s.streamSize = 4096;
     s.streamFull = 123;

@@ -385,7 +385,8 @@ struct Player::Impl {
                 return;
             }
             controlConnecting = false;
-            auto b = hello(cfg.mac, everConnected, received, sink.maxSampleRate());
+            auto b = hello(cfg.mac, everConnected, received, sink.maxSampleRate(), cfg.model, cfg.modelName,
+                           cfg.firmware);
             outbound.insert(outbound.end(), b.begin(), b.end());
             log("HELO reconnect=" + std::to_string(everConnected));
             everConnected = true;

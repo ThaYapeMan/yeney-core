@@ -29,7 +29,8 @@ Bytes packet(const std::string &op, const Bytes &body) {
     b.insert(b.end(), body.begin(), body.end());
     return b;
 }
-Bytes hello(const std::array<uint8_t, 6> &mac, bool reconnect, uint64_t received, uint32_t maxRate) {
+Bytes hello(const std::array<uint8_t, 6> &mac, bool reconnect, uint64_t received, uint32_t maxRate,
+            const std::string &model, const std::string &modelName, const std::string &firmware) {
     Bytes b{12, 0};
     b.insert(b.end(), mac.begin(), mac.end());
     // Stable, locally generated UUID derived from the identity MAC. RFC 4122 layout.
@@ -41,9 +42,12 @@ Bytes hello(const std::array<uint8_t, 6> &mac, bool reconnect, uint64_t received
     append32(b, received);
     b.push_back('E');
     b.push_back('N');
-    std::string caps =
-        "Model=yeney,ModelName=YeneY,AccuratePlayPoints=1,MaxSampleRate=" + std::to_string(maxRate) +
-        ",alc,flc,mp3,aif,pcm";
+    std::string caps = "Model=" + (model.empty() ? std::string("yeney") : model) +
+                       ",ModelName=" + (modelName.empty() ? std::string("YeneY") : modelName) +
+                       ",AccuratePlayPoints=1,MaxSampleRate=" + std::to_string(maxRate) +
+                       ",alc,flc,mp3,aif,pcm";
+    if (!firmware.empty())
+        caps += ",Firmware=" + firmware;
     b.insert(b.end(), caps.begin(), caps.end());
     return packet("HELO", b);
 }

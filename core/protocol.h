@@ -16,7 +16,9 @@ uint32_t be32(const uint8_t *);
 void append16(Bytes &, uint16_t);
 void append32(Bytes &, uint32_t);
 Bytes packet(const std::string &opcode, const Bytes &body);
-Bytes hello(const std::array<uint8_t, 6> &mac, bool reconnect, uint64_t received, uint32_t maxRate);
+Bytes hello(const std::array<uint8_t, 6> &mac, bool reconnect, uint64_t received, uint32_t maxRate,
+            const std::string &model = {}, const std::string &modelName = {},
+            const std::string &firmware = {});
 struct Status {
     uint32_t streamSize = 0, streamFull = 0, jiffies = 0, outputSize = 0, outputFull = 0, elapsed = 0;
     uint64_t received = 0;
