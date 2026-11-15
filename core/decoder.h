@@ -25,6 +25,9 @@ struct DecoderConfig {
     // Proven first delivered PCM source frame, supplied by an immutable host
     // transport. A requested seek time or container header alone is not proof.
     std::function<std::optional<uint64_t>()> pcmSourceStart;
+    // Exact audio-data count validated against this immutable HTTP response.
+    // Missing or inconsistent container metadata keeps EOF publication.
+    std::function<std::optional<uint64_t>()> pcmSourceFrames;
     // Optional validated moov payload from this exact immutable input. Queried
     // once before reading ALAC bytes; empty retains ordinary sequential parsing.
     std::function<Bytes()> mp4Metadata;

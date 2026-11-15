@@ -242,6 +242,12 @@ class PcmWorker : public Worker {
         if (cfg.pcmSourceStart)
             if (auto origin = cfg.pcmSourceStart())
                 setSourceStart(*origin);
+        if (cfg.pcmSourceFrames)
+            if (auto frames = cfg.pcmSourceFrames()) {
+                if (t.frames && *t.frames != *frames)
+                    throw std::runtime_error("PCM source length proof disagrees with container");
+                setExactFrames(*frames);
+            }
         setFormat(t.format);
         unsigned width = t.format.bits / 8 * t.format.channels;
         Bytes pending;

@@ -215,3 +215,11 @@ coordinate and packets decode sequentially without an encoded-file cache.
 The in-band moov must still arrive and match byte for byte; a missing or
 mismatched copy is an input error. Ordinary decoders and faststart files retain
 their original path when no metadata is supplied.
+
+
+For raw PCM, pcmSourceFrames may carry an exact audio-data frame count that
+the immutable host checked against the HTTP response and container framing.
+It is published before the first output block, without changing PCM decoding
+or treating a count as origin proof. Missing or inconsistent metadata keeps
+the previous EOF-based declaration. Container and host counts must agree if
+both are supplied.
