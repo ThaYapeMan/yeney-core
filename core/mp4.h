@@ -29,6 +29,7 @@ public:
     using Packet = std::function<void(const Bytes &)>;
     Mp4Demuxer(Header, Packet, size_t earlyMediaCap = 256ull * 1024 * 1024, bool partialMedia = false);
     ~Mp4Demuxer();
+    void preloadMovie(const Bytes &);
     void feed(const uint8_t *, size_t);
     void finish();
 };

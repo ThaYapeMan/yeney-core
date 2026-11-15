@@ -60,6 +60,7 @@ clock-unit: tests/clock_unit.o sinks/shm_v1/sink.o
 test: test-shm-player pcm-origin-test test-speaker format-check clock-unit shm-unit all unit-test test-player decoder-test demux-sanitized
 	./decimator-unit
 	python3 tests/content_position_test.py
+	python3 tests/mp4_prefetch_test.py
 	python3 tests/mp4_seek_test.py
 	python3 tests/pcm_origin_test.py
 	./clock-unit

@@ -206,3 +206,12 @@ distinguish a rewritten seek header. An immutable full-file download may prove
 frame zero after its response and container framing have been validated. The
 callback is nonblocking and is queried before the first output frame. This
 changes the known bit, not decoded PCM or SHM layouts.
+
+
+An immutable ALAC host may supply a validated moov payload through
+DecoderConfig::mp4Metadata before the sequential byte stream starts. The
+incremental parser keeps original file offsets, so mdat begins at its original
+coordinate and packets decode sequentially without an encoded-file cache.
+The in-band moov must still arrive and match byte for byte; a missing or
+mismatched copy is an input error. Ordinary decoders and faststart files retain
+their original path when no metadata is supplied.

@@ -256,7 +256,7 @@ struct Mp4Demuxer::Impl {
     Packet onPacket;
     size_t cap;
     bool partialMedia;
-    Bytes header, payload, packet;
+    Bytes header, payload, packet, prefetchedMovie;
     std::string type;
     uint64_t offset = 0, remaining = 0;
     bool active = false, toEnd = false, selected = false, finished = false;
@@ -470,9 +470,24 @@ struct Mp4Demuxer::Impl {
             }
         }
     }
+    void preloadMovie(const Bytes &metadata) {
+        if (offset || selected || active || finished || metadata.empty() || metadata.size() > metadataCap)
+            bad("invalid prefetched moov");
+        payload = metadata;
+        movie();
+        prefetchedMovie = std::move(payload);
+        payload.clear();
+    }
     void closeBox() {
-        if (type == "moov")
-            movie();
+        if (type == "moov") {
+            if (prefetchedMovie.empty())
+                movie();
+            else {
+                if (payload != prefetchedMovie)
+                    bad("prefetched moov differs from input");
+                prefetchedMovie.clear();
+            }
+        }
         if (type == "mdat" && !packet.empty())
             bad("packet crosses mdat boundary");
         payload.clear();
@@ -529,6 +544,8 @@ struct Mp4Demuxer::Impl {
         }
     }
     void finish() {
+        if (!prefetchedMovie.empty())
+            bad("missing prefetched moov in input");
         if (finished)
             bad("duplicate finish");
         // LMS can retain the original mdat length in a rewritten seek header.
@@ -551,6 +568,7 @@ struct Mp4Demuxer::Impl {
 Mp4Demuxer::Mp4Demuxer(Header h, Packet p, size_t cap, bool partialMedia)
     : impl_(std::make_unique<Impl>(std::move(h), std::move(p), cap, partialMedia)) {}
 Mp4Demuxer::~Mp4Demuxer() = default;
+void Mp4Demuxer::preloadMovie(const Bytes &metadata) { impl_->preloadMovie(metadata); }
 void Mp4Demuxer::feed(const uint8_t *p, size_t n) { impl_->feed(p, n); }
 void Mp4Demuxer::finish() { impl_->finish(); }
 } // namespace yeney

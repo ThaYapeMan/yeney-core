@@ -19,6 +19,32 @@ int main(int argc, char **argv) {
     config.finitePcmContainers = true;
     if (argc > 1 && (std::string(argv[1]) == "convert" || std::string(argv[1]) == "convert-flac"))
         config.convertToRate = 48000;
+    if (argc > 1 && std::string(argv[1]).rfind("prefetch", 0) == 0) {
+        size_t cursor = 0;
+        while (cursor + 8 <= bytes.size()) {
+            uint64_t length = yeney::be32(bytes.data() + cursor);
+            size_t header = 8;
+            if (length == 1) {
+                if (cursor + 16 > bytes.size())
+                    return 5;
+                length = uint64_t(yeney::be32(bytes.data() + cursor + 8)) << 32 |
+                         yeney::be32(bytes.data() + cursor + 12);
+                header = 16;
+            }
+            if (length < header || length > bytes.size() - cursor)
+                return 5;
+            if (!std::memcmp(bytes.data() + cursor + 4, "moov", 4)) {
+                yeney::Bytes movie(bytes.begin() + cursor + header, bytes.begin() + cursor + length);
+                config.mp4Metadata = [movie] { return movie; };
+                if (std::string(argv[1]) == "prefetch-mismatch")
+                    bytes[cursor + size_t(length) - 1] ^= 1;
+                if (std::string(argv[1]) == "prefetch-truncated")
+                    bytes.resize(cursor);
+                break;
+            }
+            cursor += size_t(length);
+        }
+    }
     const bool full = argc > 2;
     auto decoder = yeney::makeDecoder(config);
     size_t offset = 0;

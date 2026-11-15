@@ -674,6 +674,11 @@ class AlacWorker : public Worker {
                                          storage));
             },
             cfg.earlyMediaCap, detail::QueueDecodePolicy::allowPartialMp4(cfg));
+        if (cfg.mp4Metadata) {
+            auto metadata = cfg.mp4Metadata();
+            if (!metadata.empty())
+                demux.preloadMovie(metadata);
+        }
         uint8_t bytes[8192];
         while (size_t n = read(bytes, sizeof(bytes)))
             demux.feed(bytes, n);
