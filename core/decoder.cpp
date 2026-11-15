@@ -583,6 +583,13 @@ class Mp3Worker : public Worker {
                                 throw std::runtime_error("invalid MP3 gapless range");
                             end = total - tailPadding;
                         }
+                        const bool lame =
+                            !std::memcmp(p + pos, "LAME", 4) || !std::memcmp(p + pos, "Lavc", 4);
+                        if (lame && padding >= 529 && cfg.mp3FromStart && cfg.mp3FromStart()) {
+                            setSourceStart(0);
+                            if (count)
+                                setExactFrames(end - begin);
+                        }
                     }
                 }
             }

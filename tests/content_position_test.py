@@ -24,4 +24,5 @@ with tempfile.TemporaryDirectory(dir=os.environ.get('TMPDIR', '/var/tmp')) as di
     check('f', seek, entry['seekFrames'])
     check('l', ROOT/'tests/fixtures/alac-16-2.m4a', 0)
     check('m', ROOT/'tests/fixtures/gapless-0.mp3', 0, False)
-print('PASS content tail: PCM, FLAC, ALAC, FLAC seek landing 4096 != requested 5000, unsupported MP3, mixed validity')
+    check('mp3-proven', ROOT/'tests/fixtures/gapless-0.mp3', 0, True)
+print('PASS content tail: PCM, FLAC, ALAC, FLAC seek landing 4096 != requested 5000, proven/unproven MP3, mixed validity')

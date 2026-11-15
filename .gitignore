@@ -31,3 +31,6 @@ __pycache__/
 
 /test-shm-player
 /test-shm-player.d
+
+/mp3-origin-test
+/mp3-origin-test.d

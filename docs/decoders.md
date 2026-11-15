@@ -223,3 +223,12 @@ It is published before the first output block, without changing PCM decoding
 or treating a count as origin proof. Missing or inconsistent metadata keeps
 the previous EOF-based declaration. Container and host counts must agree if
 both are supplied.
+
+
+MP3 content coordinates are known only when the host proves a finite original
+resource at byte zero and the first frame carries valid LAME-compatible gapless
+information (including the Lavc encoder label used by libmp3lame). Existing
+encoder-delay, decoder-delay and tail-padding removal stays byte-identical.
+The first emitted content sample is frame zero; Xing/Info's frame count,
+encoder delay and padding provide the exact content length when present.
+Seek responses, absent tags and unproved/endless input remain unknown.

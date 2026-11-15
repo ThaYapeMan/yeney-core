@@ -30,6 +30,8 @@ int main(int argc, char **argv) {
     const bool known = std::stoi(argv[4]);
     if (config.codec == 'p' && known)
         config.pcmSourceStart = [expected] { return std::optional<uint64_t>(expected); };
+    if (std::string(argv[1]) == "mp3-proven")
+        config.mp3FromStart = [] { return true; };
     auto decoder = makeDecoder(config);
     std::ifstream file(argv[2], std::ios::binary);
     Bytes bytes((std::istreambuf_iterator<char>(file)), {});

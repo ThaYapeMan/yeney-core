@@ -31,6 +31,8 @@ struct DecoderConfig {
     // Optional validated moov payload from this exact immutable input. Queried
     // once before reading ALAC bytes; empty retains ordinary sequential parsing.
     std::function<Bytes()> mp4Metadata;
+    // True only for a verified full, finite original MP3 resource at byte zero.
+    std::function<bool()> mp3FromStart;
     bool finitePcmContainers = false; // queue-only: stop at validated container payload length
     bool transcoded = false;          // authoritative host/source metadata, never inferred from PCM
     uint8_t size = '1', rate = '4', channels = '2', endian = '1';

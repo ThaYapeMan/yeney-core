@@ -57,9 +57,10 @@ shm-unit: tests/shm_unit.o sinks/shm_v1/sink.o
 clock-unit: tests/clock_unit.o sinks/shm_v1/sink.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ -pthread
 
-test: test-shm-player pcm-origin-test test-speaker format-check clock-unit shm-unit all unit-test test-player decoder-test demux-sanitized
+test: mp3-origin-test test-shm-player pcm-origin-test test-speaker format-check clock-unit shm-unit all unit-test test-player decoder-test demux-sanitized
 	./decimator-unit
 	python3 tests/content_position_test.py
+	python3 tests/mp3_origin_test.py
 	python3 tests/mp4_prefetch_test.py
 	python3 tests/mp4_seek_test.py
 	python3 tests/pcm_origin_test.py
@@ -78,7 +79,7 @@ test: test-shm-player pcm-origin-test test-speaker format-check clock-unit shm-u
 	python3 tests/queue_protocol_test.py
 
 clean:
-	rm -f pcm-origin-test pcm-origin-test.d test-shm-player test-shm-player.d decimator-fixture decimator-unit tests/decimator_fixture.o tests/decimator_fixture.d tests/decimator_unit.o tests/decimator_unit.d test-speaker $(CORE_OBJS) $(APP_OBJS) $(TEST_OBJS) $(CORE_OBJS:.o=.d) $(APP_OBJS:.o=.d) $(TEST_OBJS:.o=.d) libyeneycore.a yeney-player clock-unit unit-test test-player decoder-test demux-sanitized shm-unit content-position-test content-position-test.d decoder-benchmark decoder-benchmark.d mp4-position-test mp4-position-test.d
+	rm -f mp3-origin-test mp3-origin-test.d pcm-origin-test pcm-origin-test.d test-shm-player test-shm-player.d decimator-fixture decimator-unit tests/decimator_fixture.o tests/decimator_fixture.d tests/decimator_unit.o tests/decimator_unit.d test-speaker $(CORE_OBJS) $(APP_OBJS) $(TEST_OBJS) $(CORE_OBJS:.o=.d) $(APP_OBJS:.o=.d) $(TEST_OBJS:.o=.d) libyeneycore.a yeney-player clock-unit unit-test test-player decoder-test demux-sanitized shm-unit content-position-test content-position-test.d decoder-benchmark decoder-benchmark.d mp4-position-test mp4-position-test.d
 
 -include $(CORE_OBJS:.o=.d) $(APP_OBJS:.o=.d) $(TEST_OBJS:.o=.d)
 .PHONY: all clean test format format-check
@@ -117,3 +118,7 @@ pcm-origin-test: tests/pcm_origin.cpp libyeneycore.a
 
 test-shm-player: tests/shm_player.cpp apps/yeney-player/main.cpp apps/yeney-player/main.h apps/yeney-player/sinks.o sinks/shm_v1/sink.o libyeneycore.a
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -DYENEY_PLAYER_LIBRARY -o $@ tests/shm_player.cpp apps/yeney-player/main.cpp apps/yeney-player/sinks.o sinks/shm_v1/sink.o libyeneycore.a $(LDLIBS)
+
+
+mp3-origin-test: tests/mp3_origin.cpp libyeneycore.a
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -DYENEY_MP3_ORIGIN_API -o $@ $^ $(LDLIBS)
