@@ -57,8 +57,9 @@ shm-unit: tests/shm_unit.o sinks/shm_v1/sink.o
 clock-unit: tests/clock_unit.o sinks/shm_v1/sink.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ -pthread
 
-test: mp3-origin-test test-shm-player pcm-origin-test test-speaker format-check clock-unit shm-unit all unit-test test-player decoder-test demux-sanitized
+test: decimator-fixture mp3-origin-test test-shm-player pcm-origin-test test-speaker format-check clock-unit shm-unit all unit-test test-player decoder-test demux-sanitized
 	./decimator-unit
+	python3 tests/decimator_cpu_test.py
 	python3 tests/content_position_test.py
 	python3 tests/mp3_origin_test.py
 	python3 tests/mp4_prefetch_test.py
