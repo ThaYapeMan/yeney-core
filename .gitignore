@@ -25,3 +25,9 @@ __pycache__/
 /content-position-test
 
 /mp4-position-test
+
+/pcm-origin-test
+/pcm-origin-test.d
+
+/test-shm-player
+/test-shm-player.d

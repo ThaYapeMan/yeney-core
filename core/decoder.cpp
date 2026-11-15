@@ -239,7 +239,9 @@ class PcmWorker : public Worker {
             else
                 input.push(bytes, n);
         }
-        setSourceStart(0); // PCM stream coordinate; no timestamp-derived seek offset.
+        if (cfg.pcmSourceStart)
+            if (auto origin = cfg.pcmSourceStart())
+                setSourceStart(*origin);
         setFormat(t.format);
         unsigned width = t.format.bits / 8 * t.format.channels;
         Bytes pending;

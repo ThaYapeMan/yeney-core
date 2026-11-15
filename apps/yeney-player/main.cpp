@@ -4,7 +4,7 @@
 // Licensed under the PolyForm Noncommercial License 1.0.0. See LICENSE.
 // THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
 
-#include "core/player.h"
+#include "main.h"
 #include "sinks.h"
 #include "sinks/shm_v1/sink.h"
 #include <atomic>
@@ -16,9 +16,11 @@
 std::atomic_bool stopped{false};
 static_assert(std::atomic_bool::is_always_lock_free, "signal flag must be lock free");
 extern "C" void stopPlayer(int) { stopped.store(true); }
-int main(int argc, char **argv) {
+int runPlayer(int argc, char **argv, void (*configure)(yeney::Config &)) {
     try {
         yeney::Config cfg;
+        if (configure)
+            configure(cfg);
         std::string sinkName = "null";
         int level = 0;
         std::string ignoredDevice;
@@ -122,3 +124,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 }
+
+#ifndef YENEY_PLAYER_LIBRARY
+int main(int argc, char **argv) { return runPlayer(argc, argv); }
+#endif

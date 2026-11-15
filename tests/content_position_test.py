@@ -14,6 +14,7 @@ with tempfile.TemporaryDirectory(dir=os.environ.get('TMPDIR', '/var/tmp')) as di
     pcm = work/'pcm.raw'
     pcm.write_bytes(bytes(8000))
     check('p', pcm, 0)
+    check('p', pcm, 0, False)
     check('f', ROOT/'tests/fixtures/flac-16-2.flac', 0)
     entry = json.loads((ROOT/'tests/fixtures/manifest.json').read_text())['flac'][0]
     seek = work/'seek.flac'

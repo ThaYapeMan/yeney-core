@@ -22,6 +22,9 @@ struct DecoderConfig {
     // Hosts must return within one second; missing metadata keeps sealed output.
     std::function<std::optional<FlacSourceInfo>(std::optional<FlacSourceInfo>)> flacSourceInfo;
     std::function<void(const std::string &)> flacLog;
+    // Proven first delivered PCM source frame, supplied by an immutable host
+    // transport. A requested seek time or container header alone is not proof.
+    std::function<std::optional<uint64_t>()> pcmSourceStart;
     bool finitePcmContainers = false; // queue-only: stop at validated container payload length
     bool transcoded = false;          // authoritative host/source metadata, never inferred from PCM
     uint8_t size = '1', rate = '4', channels = '2', endian = '1';

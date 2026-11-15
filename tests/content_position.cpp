@@ -26,9 +26,11 @@ int main(int argc, char **argv) {
         config.maxRate = 192000;
         config.finitePcmContainers = true;
     }
-    auto decoder = makeDecoder(config);
     const uint64_t expected = std::stoull(argv[3]);
     const bool known = std::stoi(argv[4]);
+    if (config.codec == 'p' && known)
+        config.pcmSourceStart = [expected] { return std::optional<uint64_t>(expected); };
+    auto decoder = makeDecoder(config);
     std::ifstream file(argv[2], std::ios::binary);
     Bytes bytes((std::istreambuf_iterator<char>(file)), {});
     assert(file && !bytes.empty());

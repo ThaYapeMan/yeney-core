@@ -196,3 +196,13 @@ Set `LAMPASTREAM_CHECKOUT=/path/to/LampaStream` to use another real checkout,
 including a temporary clone; its consumer remains unmodified. A missing checkout
 or failed import is a failure unless `LAMPASTREAM_CONSUMER=off` explicitly opts
 out; that choice is printed in the final summary.
+
+
+PCM source origin is unknown unless the host supplies a proven first delivered
+source frame through DecoderConfig::pcmSourceStart. Raw LMS WAV and AIFF seek
+responses carry no such evidence: strm PCM fields, requested seek time and LMS
+clock values cannot establish an origin. Container metadata alone also cannot
+distinguish a rewritten seek header. An immutable full-file download may prove
+frame zero after its response and container framing have been validated. The
+callback is nonblocking and is queried before the first output frame. This
+changes the known bit, not decoded PCM or SHM layouts.

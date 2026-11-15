@@ -302,7 +302,7 @@ class Session:
         port = self.lms.listener.getsockname()[1]
         args = [str(ROOT / 'test-player'), 'discover' if discover else host, str(port), str(self.base), mode]
         if app:
-            args = [str(ROOT / 'yeney-player'), '-n', 'Fixture', '-m', mac, '-s', host + ':' + str(port), '--sink', 'wav:' + str(self.base) + '.wav' if sink == 'wav' else sink]
+            args = [str(ROOT / ('test-shm-player' if sink == 'shm' else 'yeney-player')), '-n', 'Fixture', '-m', mac, '-s', host + ':' + str(port), '--sink', 'wav:' + str(self.base) + '.wav' if sink == 'wav' else sink]
             args += list(app_args)
             if max_rate is not None:
                 args += ['--max-rate', str(max_rate)]
