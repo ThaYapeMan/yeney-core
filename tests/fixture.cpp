@@ -174,9 +174,15 @@ int main(int argc, char **argv) {
             cfg.observeCommand = [](const yeney::Command &c) {
                 std::cout << "observe " << c.letter << ' ' << c.value << ' ' << c.playing << std::endl;
             };
-        if (std::getenv("YENEY_TEST_OBSERVER"))
-            cfg.decoderFactory = [](const yeney::DecoderConfig &c) {
-                std::cout << "factory " << c.codec << std::endl;
+        const bool observeFactory = std::getenv("YENEY_TEST_OBSERVER");
+        const bool provenPcm = std::getenv("YENEY_TEST_PCM_ORIGIN");
+        if (observeFactory || provenPcm)
+            cfg.decoderFactory = [observeFactory, provenPcm](yeney::DecoderConfig c) {
+                if (observeFactory)
+                    std::cout << "factory " << c.codec << std::endl;
+                // Opt-in proof for generated complete raw PCM in this fixture.
+                if (provenPcm && c.codec == 'p')
+                    c.pcmSourceStart = [] { return std::optional<uint64_t>(0); };
                 return yeney::makeDecoder(c);
             };
         cfg.startOnSubmit =

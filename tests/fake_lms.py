@@ -294,7 +294,7 @@ class SongQueue:
 
 
 class Session:
-    def __init__(self, app=False, discover=False, sock=None, mode="normal", host="127.0.0.1", max_rate=None, sink="wav", app_args=(), mac="02:01:02:03:04:05"):
+    def __init__(self, app=False, discover=False, sock=None, mode="normal", host="127.0.0.1", max_rate=None, sink="wav", app_args=(), mac="02:01:02:03:04:05", pcm_origin=False):
         self.temp = tempfile.TemporaryDirectory(prefix='yeney-test-')
         self.base = Path(self.temp.name) / 'record'
         self.lms = LMS(sock)
@@ -306,7 +306,8 @@ class Session:
             args += list(app_args)
             if max_rate is not None:
                 args += ['--max-rate', str(max_rate)]
-        self.proc = subprocess.Popen(args, stdout=self.log, stderr=self.log)
+        env = dict(os.environ, YENEY_TEST_PCM_ORIGIN="0") if pcm_origin else None
+        self.proc = subprocess.Popen(args, stdout=self.log, stderr=self.log, env=env)
         self.hello = self.lms.accept()
         self.http = []
         self.stopped = False

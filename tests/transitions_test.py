@@ -110,7 +110,7 @@ class TransitionTests(unittest.TestCase):
     def cross(self, next_rate=RATE, next_frames=12000, mode='normal'):
         old, a = signal(12000)
         new, b = signal(next_frames, 300000007, -100000009)
-        with Session(mode=mode) as s:
+        with Session(mode=mode, pcm_origin=True) as s:
             s.lms.strm('s', s.source(old), rate=RATE, bits=32, transition=1, period=1, gain=32768, autostart=0)
             s.lms.wait('STMd')
             s.lms.strm('s', s.source(new), rate=next_rate, bits=32, transition=1, period=1, gain=131072, autostart=0)
