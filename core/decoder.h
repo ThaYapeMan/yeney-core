@@ -45,6 +45,8 @@ class Decoder {
 public:
     static constexpr size_t inputCapacity = 65536, outputCapacity = 8192;
     virtual ~Decoder() = default;
+    // The stream connection supplies byte credits for these decoders.
+    virtual bool hasIndependentEncodedSource() const { return false; }
     virtual bool sourceStart(uint64_t &) const { return false; }
     virtual uint64_t warmupFrames() const { return 0; }
     virtual size_t feed(const uint8_t *, size_t) = 0;

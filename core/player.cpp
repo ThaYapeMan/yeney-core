@@ -685,8 +685,14 @@ struct Player::Impl {
         }
         ssize_t n = ::recv(http.fd, b, std::min(room, sizeof(b)), 0);
         if (n == 0) {
-            if (!haveHeaders ||
-                (bodyReceived < contentLength && contentLength != std::numeric_limits<uint64_t>::max()))
+            const bool truncated = !haveHeaders ||
+                (bodyReceived < contentLength && contentLength != std::numeric_limits<uint64_t>::max());
+            // A source-bound decoder still has its own HTTP input and EOF.
+            // An error DSCO for this auxiliary stream can fail the newer LMS
+            // selection before its q+s reaches the player.
+            const bool independentSource = fetching && fetching->decoder &&
+                fetching->decoder->hasIndependentEncodedSource();
+            if (truncated && !independentSource)
                 failStream("truncated HTTP response");
             else
                 eof();
